@@ -84,10 +84,25 @@ func LoadAndPrepare(path string, maxResolution int) (*PreparedImage, error) {
 		bg[3] = uint8(clamp255(sumA / opaqueCount * 255.0))
 	}
 	if hasTransparency {
-		// Keep compatibility with forza-painter preview conventions.
-		bg[0] = 255
-		bg[1] = 0
-		bg[2] = 255
+		// Transparent source: drive bg.alpha to 0 so the FH6 importer
+		// skips writing a background rectangle (transparent regions stay
+		// truly transparent in-game and reveal whatever color the user
+		// has painted the car body with).
+		//
+		// We deliberately keep the *RGB* equal to the average opaque
+		// color rather than the legacy [255,0,255] magenta marker. The
+		// FH6 importer still uses these RGB bytes for two things even
+		// when alpha is 0:
+		//   1. The "ideal background color for the car" advice it
+		//      prints on import — so the user paints the car with a
+		//      color that blends with the visible content instead of
+		//      with a hard-coded magenta.
+		//   2. The Selected-JSON preview panel, which fills the canvas
+		//      with the bg RGB ignoring alpha; using the average color
+		//      makes that preview look like a coherent image instead of
+		//      a magenta plate.
+		// Both downstream uses are now sensible while the actual import
+		// behavior (skip the bg rectangle) is unchanged.
 		bg[3] = 0
 	}
 

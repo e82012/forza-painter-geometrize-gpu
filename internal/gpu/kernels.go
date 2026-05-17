@@ -2,16 +2,39 @@ package gpu
 
 // evaluateKernelSource contains all OpenCL kernels used by the engine.
 //
-// evaluate_candidates_v3:
+// evaluate_candidates_v3 (single-pass, analytic):
 //   For each candidate (cx, cy, rx, ry, thetaDeg, alpha) it computes the
 //   geometrize-style "optimal color" (alpha-weighted mean of the target
-//   minus current contribution inside the shape) and then the resulting
-//   delta error if that shape were to be drawn over the current canvas.
-//   Output per candidate: 4 floats { score, R, G, B }. Score is
-//   (newError - oldError) summed over inside pixels (negative = better).
-//   Pixels outside the opaque mask are simply skipped (they neither score
-//   nor invalidate the candidate). A candidate that does not cover any
-//   opaque pixel is rejected with +Inf so the engine ignores it.
+//   minus current contribution inside the shape) and the resulting delta
+//   error if that shape were drawn over the current canvas.
+//
+//   Crucially this is done in a SINGLE pass over the bounding box. We
+//   accumulate per-channel statistics
+//     N    = inside pixel count
+//     Σs   = sum of current
+//     Σt   = sum of target
+//     Σs²  = sum of current squared
+//     Σst  = sum of current * target
+//   and then derive both the optimal RGB color AND the analytic delta
+//   error in O(1) post-loop work via the identity
+//
+//     Σ ΔErr = α²·[N·c² − 2c·Σs + Σs²] − 2α·[c·Σt − c·Σs − Σst + Σs²]
+//
+//   which holds for any constant c summed over the ellipse. The alpha
+//   channel uses the same identity with c=1 (because out_a blends
+//   towards 1 weighted by α, not towards a free color parameter).
+//
+//   Skipping the second bbox traversal halves the work-item runtime at
+//   the cost of ~17 extra register-resident accumulators per work-item.
+//
+//   Output per candidate: 4 floats { score, R, G, B }. Score is summed
+//   over inside pixels (negative = better). Opaque pixels feed the
+//   optimal-color statistics; transparent pixels inside the ellipse are
+//   counted separately and add a penalty α²·(1+oR²+oG²+oB²) per pixel
+//   (modeling the fact that the FH6 renderer will paint those pixels
+//   even though our internal canvas masks them). This biases candidates
+//   to stay inside the silhouette but still allows useful overhang. A
+//   candidate that does not cover any opaque pixel is rejected (+Inf).
 //
 // apply_candidate_v2:
 //   Blends a chosen shape into the current canvas. Operates on a tight
@@ -19,8 +42,9 @@ package gpu
 //
 // compute_error_grid:
 //   Buckets the per-pixel squared error of (target - current) into a
-//   downsampled gridW x gridH buffer. The host side reads it back and uses
-//   it to bias random candidate placement towards high-error regions.
+//   downsampled gridW x gridH buffer. The host side reads it back and
+//   uses it to bias random candidate placement towards high-error
+//   regions.
 const evaluateKernelSource = `
 __kernel void evaluate_candidates_v3(
     __global const float4* target,
@@ -64,35 +88,49 @@ __kernel void evaluate_candidates_v3(
     xMax = min(width - 1, xMax);
     yMax = min(height - 1, yMax);
 
-    // Pass 1: accumulate target / current means inside the ellipse.
-    float sumTR = 0.0f, sumTG = 0.0f, sumTB = 0.0f;
-    float sumCR = 0.0f, sumCG = 0.0f, sumCB = 0.0f;
-    int count = 0;
+    // Per-channel statistics. 17 floats live in registers across the
+    // bbox iteration; modern GPUs have plenty of headroom for this.
+    int N = 0;   // opaque pixels inside the ellipse
+    int Nt = 0;  // transparent pixels inside the ellipse (penalty bucket)
+    float sTR = 0.0f, sTG = 0.0f, sTB = 0.0f, sTA = 0.0f;       // Σ target
+    float sCR = 0.0f, sCG = 0.0f, sCB = 0.0f, sCA = 0.0f;       // Σ current
+    float sCR2 = 0.0f, sCG2 = 0.0f, sCB2 = 0.0f, sCA2 = 0.0f;   // Σ current²
+    float sTCR = 0.0f, sTCG = 0.0f, sTCB = 0.0f, sTCA = 0.0f;   // Σ target·current
 
     for (int y = yMin; y <= yMax; ++y) {
         int row = y * width;
         float dy = ((float)y + 0.5f) - cy;
         for (int x = xMin; x <= xMax; ++x) {
-            int p = row + x;
-            if (opaqueMask[p] == 0) {
-                continue;
-            }
             float dx = ((float)x + 0.5f) - cx;
             float xr = dx * cosT + dy * sinT;
             float yr = -dx * sinT + dy * cosT;
             if (xr * xr * invRX2 + yr * yr * invRY2 > 1.0f) {
                 continue;
             }
+            int p = row + x;
+            if (opaqueMask[p] == 0) {
+                Nt++;
+                continue;
+            }
 
             float4 t = target[p];
             float4 s = current[p];
-            sumTR += t.x; sumTG += t.y; sumTB += t.z;
-            sumCR += s.x; sumCG += s.y; sumCB += s.z;
-            count++;
+
+            sTR += t.x; sTG += t.y; sTB += t.z; sTA += t.w;
+            sCR += s.x; sCG += s.y; sCB += s.z; sCA += s.w;
+            sCR2 += s.x * s.x;
+            sCG2 += s.y * s.y;
+            sCB2 += s.z * s.z;
+            sCA2 += s.w * s.w;
+            sTCR += t.x * s.x;
+            sTCG += t.y * s.y;
+            sTCB += t.z * s.z;
+            sTCA += t.w * s.w;
+            N++;
         }
     }
 
-    if (count == 0) {
+    if (N == 0) {
         // Shape doesn't cover any opaque pixel; reject hard.
         results[gid * 4 + 0] = 3.402823466e+38f;
         results[gid * 4 + 1] = 0.0f;
@@ -101,60 +139,45 @@ __kernel void evaluate_candidates_v3(
         return;
     }
 
-    float invCount = 1.0f / (float)count;
-    float meanTR = sumTR * invCount;
-    float meanTG = sumTG * invCount;
-    float meanTB = sumTB * invCount;
-    float meanCR = sumCR * invCount;
-    float meanCG = sumCG * invCount;
-    float meanCB = sumCB * invCount;
-
-    // Optimal color: target = current * (1 - a) + color * a
-    //   => color = (target - current * (1 - a)) / a   (averaged inside).
+    float Nf = (float)N;
+    float invN = 1.0f / Nf;
     float invA = 1.0f - ca;
-    float oR = clamp((meanTR - meanCR * invA) / ca, 0.0f, 1.0f);
-    float oG = clamp((meanTG - meanCG * invA) / ca, 0.0f, 1.0f);
-    float oB = clamp((meanTB - meanCB * invA) / ca, 0.0f, 1.0f);
 
-    // Pass 2: score with the optimal color.
-    float totalDelta = 0.0f;
-    for (int y = yMin; y <= yMax; ++y) {
-        int row = y * width;
-        float dy = ((float)y + 0.5f) - cy;
-        for (int x = xMin; x <= xMax; ++x) {
-            int p = row + x;
-            if (opaqueMask[p] == 0) {
-                continue;
-            }
-            float dx = ((float)x + 0.5f) - cx;
-            float xr = dx * cosT + dy * sinT;
-            float yr = -dx * sinT + dy * cosT;
-            if (xr * xr * invRX2 + yr * yr * invRY2 > 1.0f) {
-                continue;
-            }
+    // Optimal RGB color: c = (mean(t) − mean(s)·(1−α)) / α  (clamped).
+    // The clamped color is what will actually be rendered, so we plug
+    // that same value into the analytic ΔErr formula below — the
+    // identity holds for any constant c, not just the unclamped optimum.
+    float oR = clamp((sTR * invN - (sCR * invN) * invA) / ca, 0.0f, 1.0f);
+    float oG = clamp((sTG * invN - (sCG * invN) * invA) / ca, 0.0f, 1.0f);
+    float oB = clamp((sTB * invN - (sCB * invN) * invA) / ca, 0.0f, 1.0f);
 
-            float4 t = target[p];
-            float4 s = current[p];
+    // Σ ΔErr = α²·[N·c² − 2c·Σs + Σs²] − 2α·[c·Σt − c·Σs − Σst + Σs²]
+    //
+    // RGB channels use the optimised c above. The alpha channel blends
+    // toward 1 (out_a = s_a·(1−α) + α), so we substitute c = 1 below.
+    float a2 = ca * ca;
+    float two_a = 2.0f * ca;
 
-            float dr0 = t.x - s.x;
-            float dg0 = t.y - s.y;
-            float db0 = t.z - s.z;
-            float da0 = t.w - s.w;
-            float oldErr = dr0 * dr0 + dg0 * dg0 + db0 * db0 + da0 * da0;
+    float dR = a2 * (Nf*oR*oR - 2.0f*oR*sCR + sCR2)
+             - two_a * (oR*sTR - oR*sCR - sTCR + sCR2);
+    float dG = a2 * (Nf*oG*oG - 2.0f*oG*sCG + sCG2)
+             - two_a * (oG*sTG - oG*sCG - sTCG + sCG2);
+    float dB = a2 * (Nf*oB*oB - 2.0f*oB*sCB + sCB2)
+             - two_a * (oB*sTB - oB*sCB - sTCB + sCB2);
+    float dA = a2 * (Nf - 2.0f*sCA + sCA2)
+             - two_a * (sTA - sCA - sTCA + sCA2);
 
-            float nR = s.x * invA + oR * ca;
-            float nG = s.y * invA + oG * ca;
-            float nB = s.z * invA + oB * ca;
-            float nA = s.w * invA + ca;
+    float totalDelta = dR + dG + dB + dA;
 
-            float dr1 = t.x - nR;
-            float dg1 = t.y - nG;
-            float db1 = t.z - nB;
-            float da1 = t.w - nA;
-            float newErr = dr1 * dr1 + dg1 * dg1 + db1 * db1 + da1 * da1;
-
-            totalDelta += (newErr - oldErr);
-        }
+    // Transparent-pixel penalty: each transparent pixel inside the
+    // ellipse will be painted by the FH6 renderer with colour
+    // (oR,oG,oB,α) over a transparent target (0,0,0,0), contributing
+    // α²·(oR² + oG² + oB² + 1) to the *visible* squared error even
+    // though our masked Apply skips it. Adding it here pushes shapes
+    // back inside the silhouette without hard-rejecting overhang.
+    if (Nt > 0) {
+        float penalty = a2 * ((float)Nt) * (oR*oR + oG*oG + oB*oB + 1.0f);
+        totalDelta += penalty;
     }
 
     results[gid * 4 + 0] = totalDelta;
