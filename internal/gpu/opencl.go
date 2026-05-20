@@ -711,3 +711,15 @@ func (e *Evaluator) GridDims() (int, int) {
 func (e *Evaluator) ImageDims() (int, int) {
 	return e.width, e.height
 }
+
+// ResetCurrentBuffer clears/re-uploads the initial current canvas back to e.currentBuffer.
+func (e *Evaluator) ResetCurrentBuffer(current []float32) error {
+	if len(current) != e.pixelCount*4 {
+		return fmt.Errorf("current slice length mismatch")
+	}
+	evt, err := e.queue.EnqueueWriteBufferFloat32(e.currentBuffer, true, 0, current, nil)
+	if evt != nil {
+		evt.Release()
+	}
+	return err
+}

@@ -99,6 +99,9 @@ func Run(opts Options) error {
 
 	acceptedShapes := 0
 	consecutiveNoImprove := 0
+	finalPruneAttempts := 0
+	lastPrunedMilestone := 0
+	const maxFinalPrunes = 5
 
 	for acceptedShapes < cfg.StopAt {
 		step := acceptedShapes + 1
@@ -107,7 +110,11 @@ func Run(opts Options) error {
 		// While we generate random candidates on the CPU, the GPU may
 		// still be running the previous shape's apply + error-grid
 		// kernels (queued non-blocking at the end of the last iteration).
-		randomCands := randomCandidates(rng, prepared, cfg.RandomSamples, cfg.ForceOpaqueShapes, sampler)
+		var progress float32
+		if cfg.StopAt > 0 {
+			progress = float32(acceptedShapes) / float32(cfg.StopAt)
+		}
+		randomCands := randomCandidates(rng, prepared, cfg.RandomSamples, cfg.ForceOpaqueShapes, sampler, progress)
 
 		fmt.Printf("[%d/%d] Evaluating random sample batch on OpenCL (%d)...\n", step, cfg.StopAt, len(randomCands))
 		best, bestScore, err := submitAndPickBest(evaluator, randomCands)
@@ -184,6 +191,72 @@ func Run(opts Options) error {
 			}
 			if opts.PreviewPath != "" {
 				fmt.Printf("[%d/%d] Saved preview snapshot\n", acceptedShapes, cfg.StopAt)
+			}
+		}
+
+		isMilestonePass := acceptedShapes > 0 && acceptedShapes%500 == 0 && acceptedShapes > lastPrunedMilestone
+		isFinalPass := acceptedShapes == cfg.StopAt && finalPruneAttempts < maxFinalPrunes
+
+		if isMilestonePass || isFinalPass {
+			if isFinalPass {
+				fmt.Printf("[%d/%d] Reached target! Running final occlusion culling and compaction pass (%d/%d)...\n",
+					acceptedShapes, cfg.StopAt, finalPruneAttempts+1, maxFinalPrunes)
+			} else {
+				fmt.Printf("[%d/%d] Scanning for completely occluded shapes to recycle...\n", acceptedShapes, cfg.StopAt)
+			}
+
+			if err := evaluator.Flush(); err != nil {
+				return err
+			}
+			pendingGrid = gpu.GridTicket{} // invalidated by Flush()
+
+			if isMilestonePass {
+				lastPrunedMilestone = acceptedShapes
+			}
+
+			pruned := pruneOccludedShapes(shapes, prepared.Width, prepared.Height, prepared.OpaqueMask)
+			removedCount := len(shapes) - len(pruned)
+
+			if removedCount > 0 {
+				if isFinalPass {
+					fmt.Printf("[%d/%d] Recycled %d occluded shapes in final pass! Active shapes: %d -> %d\n",
+						acceptedShapes, cfg.StopAt, removedCount, len(shapes), len(pruned))
+					finalPruneAttempts++
+				} else {
+					fmt.Printf("[%d/%d] Recycled %d occluded shapes! Active shapes: %d -> %d\n",
+						acceptedShapes, cfg.StopAt, removedCount, len(shapes), len(pruned))
+				}
+				shapes = pruned
+				acceptedShapes = len(shapes) - 1
+
+				if err := evaluator.ResetCurrentBuffer(prepared.Current); err != nil {
+					return err
+				}
+				for _, s := range shapes[1:] {
+					cand := model.Candidate{
+						X:     float32(s.Data[0]),
+						Y:     float32(s.Data[1]),
+						RX:    float32(s.Data[2]),
+						RY:    float32(s.Data[3]),
+						Theta: float32(s.Data[4]),
+						R:     float32(s.Color[0]) / 255.0,
+						G:     float32(s.Color[1]) / 255.0,
+						B:     float32(s.Color[2]) / 255.0,
+						A:     float32(s.Color[3]) / 255.0,
+					}
+					if err := evaluator.SubmitApply(cand); err != nil {
+						return err
+					}
+				}
+				if err := evaluator.Flush(); err != nil {
+					return err
+				}
+			} else {
+				if isFinalPass {
+					fmt.Printf("[%d/%d] Final pass: No occluded shapes found. Ready to finish.\n", acceptedShapes, cfg.StopAt)
+				} else {
+					fmt.Printf("[%d/%d] No occluded shapes found to recycle.\n", acceptedShapes, cfg.StopAt)
+				}
 			}
 		}
 
@@ -364,12 +437,21 @@ func (s *errorSampler) sample(rng *rand.Rand) (float32, float32) {
 // angle) is randomized; color is left zero because the GPU evaluator
 // computes the optimal color analytically and writes it back in the
 // EvalResult.
-func randomCandidates(rng *rand.Rand, prepared *imageutil.PreparedImage, count int, forceOpaque bool, sampler *errorSampler) []model.Candidate {
+func randomCandidates(rng *rand.Rand, prepared *imageutil.PreparedImage, count int, forceOpaque bool, sampler *errorSampler, progress float32) []model.Candidate {
 	out := make([]model.Candidate, 0, count)
 	w := float32(prepared.Width)
 	h := float32(prepared.Height)
 	diag := float32(math.Sqrt(float64(prepared.Width*prepared.Width) + float64(prepared.Height*prepared.Height)))
-	maxRadius := diag * 0.25
+	
+	if progress < 0 {
+		progress = 0
+	}
+	if progress > 1 {
+		progress = 1
+	}
+	// Progressive scale decay: starts at 0.25 * diag and smoothly decays to 0.05 * diag.
+	scaleFactor := float32(0.25 - 0.20 * math.Pow(float64(progress), 1.5))
+	maxRadius := diag * scaleFactor
 	if maxRadius < 4 {
 		maxRadius = 4
 	}
@@ -646,4 +728,121 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func pruneOccludedShapes(shapes []model.Shape, width, height int, opaqueMask []uint8) []model.Shape {
+	if len(shapes) <= 1 {
+		return shapes
+	}
+
+	// cov keeps track of pixels that are covered by 100% opaque shapes.
+	// 0: not covered, 1: covered by an opaque shape
+	cov := make([]uint8, width*height)
+
+	// We iterate from the last shape down to the first shape (index 1).
+	// Background shape at index 0 is always kept.
+	keep := make([]bool, len(shapes))
+	keep[0] = true // background shape is always kept
+
+	for j := len(shapes) - 1; j >= 1; j-- {
+		s := shapes[j]
+		if s.Type != 16 {
+			// If it's not a rotated ellipse, we just keep it.
+			keep[j] = true
+			continue
+		}
+
+		cx := float32(s.Data[0])
+		cy := float32(s.Data[1])
+		rx := float32(s.Data[2])
+		ry := float32(s.Data[3])
+		theta := float32(s.Data[4])
+		alpha := s.Color[3] // 0-255
+
+		if rx < 1 {
+			rx = 1
+		}
+		if ry < 1 {
+			ry = 1
+		}
+
+		t := theta * (math.Pi / 180.0)
+		cosT := float32(math.Cos(float64(t)))
+		sinT := float32(math.Sin(float64(t)))
+		invRX2 := float32(1.0) / (rx * rx)
+		invRY2 := float32(1.0) / (ry * ry)
+
+		xMin := clampInt(int(cx-rx-1), 0, width-1)
+		xMax := clampInt(int(cx+rx+1), 0, width-1)
+		yMin := clampInt(int(cy-ry-1), 0, height-1)
+		yMax := clampInt(int(cy+ry+1), 0, height-1)
+
+		// Check if this shape is completely occluded by already-drawn opaque shapes
+		isOccluded := true
+		hasOpaquePixelsInsideMask := false
+
+		for y := yMin; y <= yMax; y++ {
+			for x := xMin; x <= xMax; x++ {
+				p := y*width + x
+				if opaqueMask[p] == 0 {
+					continue
+				}
+
+				dx := float32(x) + 0.5 - cx
+				dy := float32(y) + 0.5 - cy
+				xr := dx*cosT + dy*sinT
+				yr := -dx*sinT + dy*cosT
+				if xr*xr*invRX2+yr*yr*invRY2 <= 1.0 {
+					hasOpaquePixelsInsideMask = true
+					if cov[p] == 0 {
+						// This pixel of the ellipse is visible (not covered by any subsequent opaque shape)
+						isOccluded = false
+						break
+					}
+				}
+			}
+			if !isOccluded {
+				break
+			}
+		}
+
+		// If the shape covers no pixels inside the opaque mask, we can treat it as occluded/useless.
+		if !hasOpaquePixelsInsideMask {
+			isOccluded = true
+		}
+
+		if isOccluded {
+			// This shape is completely covered, we don't keep it!
+			keep[j] = false
+		} else {
+			keep[j] = true
+			// If this shape is 100% opaque, mark all its pixels as covered in the cov mask
+			if alpha == 255 {
+				for y := yMin; y <= yMax; y++ {
+					for x := xMin; x <= xMax; x++ {
+						p := y*width + x
+						if opaqueMask[p] == 0 {
+							continue
+						}
+						dx := float32(x) + 0.5 - cx
+						dy := float32(y) + 0.5 - cy
+						xr := dx*cosT + dy*sinT
+						yr := -dx*sinT + dy*cosT
+						if xr*xr*invRX2+yr*yr*invRY2 <= 1.0 {
+							cov[p] = 1
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Rebuild the shapes list
+	pruned := make([]model.Shape, 0, len(shapes))
+	for j, k := range keep {
+		if k {
+			pruned = append(pruned, shapes[j])
+		}
+	}
+	return pruned
 }
