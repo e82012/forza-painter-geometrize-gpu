@@ -68,6 +68,7 @@ func Run(opts Options) error {
 	if err != nil {
 		return err
 	}
+	evaluator.UseWorkGroupEval = cfg.UseWorkGroupEval
 	defer evaluator.Close()
 
 	rng := rand.New(rand.NewSource(seedValue(opts.Seed)))
@@ -94,7 +95,7 @@ func Run(opts Options) error {
 	fmt.Printf("Compatibility mode: forceOpaqueShapes=%v\n", cfg.ForceOpaqueShapes)
 	fmt.Printf("Hill climb: %d rounds x %d mutations (move +/- %.1fpx, radius +/- %.1fpx, theta +/- 30deg)\n",
 		hillClimbRounds, mutationsPerRound, moveStep, radiusStep)
-	fmt.Println("Pipeline: async (in-order queue, ring=2; sampler 1-shape stale)")
+	fmt.Println("Pipeline: async (in-order queue, ring=3; sampler 1-shape stale)")
 	fmt.Println("Scoring mode: DeltaE with GPU-computed optimal color (negative = better)")
 
 	acceptedShapes := 0
@@ -442,7 +443,7 @@ func randomCandidates(rng *rand.Rand, prepared *imageutil.PreparedImage, count i
 	w := float32(prepared.Width)
 	h := float32(prepared.Height)
 	diag := float32(math.Sqrt(float64(prepared.Width*prepared.Width) + float64(prepared.Height*prepared.Height)))
-	
+
 	if progress < 0 {
 		progress = 0
 	}
@@ -450,7 +451,7 @@ func randomCandidates(rng *rand.Rand, prepared *imageutil.PreparedImage, count i
 		progress = 1
 	}
 	// Progressive scale decay: starts at 0.25 * diag and smoothly decays to 0.05 * diag.
-	scaleFactor := float32(0.25 - 0.20 * math.Pow(float64(progress), 1.5))
+	scaleFactor := float32(0.25 - 0.20*math.Pow(float64(progress), 1.5))
 	maxRadius := diag * scaleFactor
 	if maxRadius < 4 {
 		maxRadius = 4
