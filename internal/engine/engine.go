@@ -1,3 +1,8 @@
+// $env:CGO_CFLAGS='-IC:\CUDA\include'
+// $env:CGO_LDFLAGS='-LC:\msys64\ucrt64\lib -lOpenCL'
+// $env:CGO_CFLAGS='-DCL_TARGET_OPENCL_VERSION=120 -IC:\CUDA\include'
+// go build -o forza.exe ./cmd/forza-painter-geometrize
+
 package engine
 
 import (
@@ -115,6 +120,12 @@ func Run(opts Options) error {
 		if cfg.StopAt > 0 {
 			progress = float32(acceptedShapes) / float32(cfg.StopAt)
 		}
+
+		evaluator.SampleStep = scoringSampleStep(progress)
+
+		fmt.Printf("[%d/%d] Scoring sample step: %d\n",
+			step, cfg.StopAt, evaluator.SampleStep)
+
 		randomCands := randomCandidates(rng, prepared, cfg.RandomSamples, cfg.ForceOpaqueShapes, sampler, progress)
 
 		fmt.Printf("[%d/%d] Evaluating random sample batch on OpenCL (%d)...\n", step, cfg.StopAt, len(randomCands))
@@ -729,6 +740,22 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func scoringSampleStep(progress float32) int {
+	if progress >= 0.333 {
+		return 1
+	}
+
+	t := float64(progress / 0.333)
+
+	step := 1.0 + 7.0*math.Pow(1.0-t, 2.0)
+
+	if step < 1 {
+		return 1
+	}
+
+	return int(math.Round(step))
 }
 
 func pruneOccludedShapes(shapes []model.Shape, width, height int, opaqueMask []uint8) []model.Shape {
