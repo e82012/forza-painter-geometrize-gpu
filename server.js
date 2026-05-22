@@ -20,7 +20,8 @@ let jobStatus = {
   endTime: null,
   elapsedTimeS: 0,
   remainingTimeS: 0,
-  errorMsg: ''
+  errorMsg: '',
+  logs: []
 };
 
 // 守護函式：確保 Node 進程關閉或崩潰時，也一定會將背景運行的 Go/GPU 子進程終止，防止資源洩漏
@@ -259,7 +260,8 @@ const server = http.createServer((req, res) => {
           endTime: null,
           elapsedTimeS: 0,
           remainingTimeS: 0,
-          errorMsg: ''
+          errorMsg: '',
+          logs: []
         };
 
         // 決定品質參數：統一預設最大圖層為 1200 層
@@ -347,9 +349,19 @@ stopAt = ${config.stopAt}
 
         currentJob = spawn(execPath, args, { cwd: __dirname });
 
+        const appendLog = (line) => {
+          if (!line) return;
+          console.log(`[Engine] ${line}`);
+          jobStatus.logs.push(line);
+          if (jobStatus.logs.length > 200) {
+            jobStatus.logs.shift();
+          }
+        };
+
         // 解析進度
         const rl = readline.createInterface({ input: currentJob.stdout });
         rl.on('line', (line) => {
+          appendLog(line);
           if (line.includes('Step completed in')) {
             const bracketOpen = line.indexOf('[');
             const slash = line.indexOf('/');
@@ -382,6 +394,11 @@ stopAt = ${config.stopAt}
               jobStatus.remainingTimeS = 0;
             }
           }
+        });
+
+        const rlErr = readline.createInterface({ input: currentJob.stderr });
+        rlErr.on('line', (line) => {
+          appendLog(`[ERROR] ${line}`);
         });
 
         currentJob.on('error', (err) => {

@@ -27,6 +27,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const statRemainingTime = document.getElementById('statRemainingTime');
   const statStepTime = document.getElementById('statStepTime');
   const toastContainer = document.getElementById('toastContainer');
+  const consoleLogBox = document.getElementById('consoleLogBox');
 
   // 自定義參數欄位
   const stopAtInput = document.getElementById('stopAt');
@@ -216,6 +217,7 @@ document.addEventListener('DOMContentLoaded', () => {
     statElapsedTime.textContent = '00:00:00';
     statRemainingTime.textContent = '00:00:00';
     statStepTime.textContent = '0 ms';
+    consoleLogBox.innerHTML = '<div class="log-line text-dim">正在啟動幾何擬合引擎...</div>';
 
     fetch('/api/start', {
       method: 'POST',
@@ -343,6 +345,18 @@ document.addEventListener('DOMContentLoaded', () => {
         statRemainingTime.textContent = formatTime(status.remainingTimeS);
         statStepTime.textContent = `${status.stepTimeMs} ms`;
 
+        // 更新即時日誌
+        if (status.logs && status.logs.length > 0) {
+          const isScrolledToBottom = consoleLogBox.scrollHeight - consoleLogBox.clientHeight <= consoleLogBox.scrollTop + 10;
+          consoleLogBox.innerHTML = status.logs.map(line => {
+            const isError = line.startsWith('[ERROR]');
+            return `<div class="log-line ${isError ? 'text-error' : ''}">${escapeHtml(line)}</div>`;
+          }).join('');
+          if (isScrolledToBottom) {
+            consoleLogBox.scrollTop = consoleLogBox.scrollHeight;
+          }
+        }
+
         // 載入預覽圖片 (加上隨機參數避免瀏覽器快取)
         if (status.currentStep > 0) {
           loaderOverlay.classList.add('hidden');
@@ -408,5 +422,13 @@ document.addEventListener('DOMContentLoaded', () => {
         icon: '/favicon.ico'
       });
     }
+  }
+
+  function escapeHtml(str) {
+    return str.replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;')
+              .replace(/'/g, '&#039;');
   }
 });
