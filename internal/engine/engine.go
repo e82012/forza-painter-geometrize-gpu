@@ -113,8 +113,8 @@ func Run(opts Options) error {
 
 	shapes := []model.Shape{backgroundShape(prepared, normalizeScore(currentError, denom))}
 
-	moveStep, radiusStep := mutationSteps(prepared.Width, prepared.Height)
-	hillClimbRounds, mutationsPerRound := planHillClimb(cfg.MutatedSamples)
+	lambda := 32
+	generations := cfg.MutatedSamples / lambda
 
 	// Initial sampler is computed synchronously - the engine has nothing
 	// useful to do until the first random batch can be sampled.
@@ -129,8 +129,8 @@ func Run(opts Options) error {
 	fmt.Printf("Settings: stopAt=%d randomSamples=%d mutatedSamples=%d saveAt=%d saveEvery(preview)=%d\n",
 		cfg.StopAt, cfg.RandomSamples, cfg.MutatedSamples, len(cfg.SaveAt), cfg.SaveEvery)
 	fmt.Printf("Compatibility mode: forceOpaqueShapes=%v\n", cfg.ForceOpaqueShapes)
-	fmt.Printf("Hill climb: %d rounds x %d mutations (move +/- %.1fpx, radius +/- %.1fpx, theta +/- 30deg)\n",
-		hillClimbRounds, mutationsPerRound, moveStep, radiusStep)
+	fmt.Printf("CMA-ES: %d generations x %d population (normalized space [0,1]^5, adaptive covariance)\n",
+		generations, lambda)
 	fmt.Println("Pipeline: async (in-order queue, ring=3; sampler 1-shape stale)")
 	fmt.Println("Scoring mode: DeltaE with GPU-computed optimal color (negative = better)")
 
@@ -166,22 +166,64 @@ func Run(opts Options) error {
 		}
 		fmt.Printf("[%d/%d] Random best delta: %.6f\n", step, cfg.StopAt, bestScore)
 
-		if hillClimbRounds > 0 && mutationsPerRound > 0 && bestScore < 0 {
+		if generations > 0 && bestScore < 0 {
+			maxRad := progressiveMaxRadius(prepared.Width, prepared.Height, progress)
+			initialSigma := progressiveInitialSigma(progress)
+			bounds := CMAESBounds{
+				MaxW:   float32(prepared.Width),
+				MaxH:   float32(prepared.Height),
+				MaxRad: maxRad,
+			}
+			cma := NewCMAES(best, initialSigma, lambda, bounds)
 			improved := 0
-			for round := 0; round < hillClimbRounds; round++ {
-				mutations := mutatedCandidates(rng, prepared, best, mutationsPerRound, cfg.ForceOpaqueShapes, moveStep, radiusStep)
-				roundBest, roundScore, mutErr := submitAndPickBest(evaluator, mutations)
-				if mutErr != nil {
-					return mutErr
+
+			for gen := 0; gen < generations; gen++ {
+				population, zVecs, yVecs := cma.SamplePopulation(rng)
+				t, err := evaluator.SubmitEval(population)
+				if err != nil {
+					return err
 				}
-				if roundScore < bestScore {
-					bestScore = roundScore
-					best = roundBest
+				results, err := evaluator.WaitEval(t)
+				if err != nil {
+					return err
+				}
+				if len(results) == 0 {
+					return fmt.Errorf("no candidate scores returned during CMA-ES")
+				}
+
+				// Find best in this generation
+				genBestIdx := 0
+				genBestScore := results[0].Score
+				for i := 1; i < len(results); i++ {
+					if results[i].Score < genBestScore {
+						genBestScore = results[i].Score
+						genBestIdx = i
+					}
+				}
+
+				// If it improved, update our overall best shape
+				if genBestScore < bestScore {
+					bestScore = genBestScore
+					best = population[genBestIdx]
+					best.R = results[genBestIdx].R
+					best.G = results[genBestIdx].G
+					best.B = results[genBestIdx].B
 					improved++
 				}
+
+				// Extract scores slice for CMA-ES
+				scores := make([]float32, len(results))
+				for i := 0; i < len(results); i++ {
+					scores[i] = results[i].Score
+					population[i].R = results[i].R
+					population[i].G = results[i].G
+					population[i].B = results[i].B
+				}
+
+				cma.Update(population, scores, zVecs, yVecs)
 			}
-			fmt.Printf("[%d/%d] Hill climb best delta after %d rounds: %.6f (%d improvement(s))\n",
-				step, cfg.StopAt, hillClimbRounds, bestScore, improved)
+			fmt.Printf("[%d/%d] CMA-ES best delta after %d generations: %.6f (%d improvement(s))\n",
+				step, cfg.StopAt, generations, bestScore, improved)
 		}
 
 		if bestScore >= minImproveDelta {
@@ -375,33 +417,40 @@ func backgroundShape(p *imageutil.PreparedImage, score float64) model.Shape {
 	}
 }
 
-// planHillClimb splits the configured mutation budget into a number of
-// rounds and a per-round batch size. We aim for ~64 candidates per round
-// to keep the GPU occupied while still giving the climb enough steps to
-// walk uphill instead of just sampling around the random seed.
-func planHillClimb(budget int) (rounds, perRound int) {
-	if budget <= 0 {
-		return 0, 0
+// progressiveInitialSigma returns the starting standard deviation step size
+// for CMA-ES in the normalized [0, 1]^5 space. It decays with overall progress.
+func progressiveInitialSigma(progress float32) float64 {
+	p := float64(progress)
+	switch {
+	case p < 0.3:
+		return 0.05
+	case p < 0.7:
+		t := (p - 0.3) / 0.4
+		return 0.05 - t*(0.05-0.02)
+	default:
+		t := (p - 0.7) / 0.3
+		if t > 1 {
+			t = 1
+		}
+		return 0.02 - t*(0.02-0.005)
 	}
-	rounds = budget / idealHillClimbBatch
-	if rounds < minHillClimbRounds {
-		rounds = minHillClimbRounds
-	}
-	if rounds > maxHillClimbRounds {
-		rounds = maxHillClimbRounds
-	}
-	perRound = budget / rounds
-	if perRound < 1 {
-		perRound = 1
-	}
-	return rounds, perRound
 }
 
-func mutationSteps(width, height int) (move, radius float32) {
-	diag := math.Sqrt(float64(width*width) + float64(height*height))
-	move = float32(math.Max(2.0, diag*0.012))
-	radius = float32(math.Max(2.0, diag*0.010))
-	return move, radius
+func progressiveMaxRadius(width, height int, progress float32) float32 {
+	diag := float32(math.Sqrt(float64(width*width) + float64(height*height)))
+	if progress < 0 {
+		progress = 0
+	}
+	if progress > 1 {
+		progress = 1
+	}
+	// Progressive scale decay: starts at 0.25 * diag and smoothly decays to 0.05 * diag.
+	scaleFactor := float32(0.25 - 0.20*math.Pow(float64(progress), 1.5))
+	maxRadius := diag * scaleFactor
+	if maxRadius < 4 {
+		maxRadius = 4
+	}
+	return maxRadius
 }
 
 // errorSampler converts the GPU-produced error histogram into a CDF that
@@ -484,20 +533,7 @@ func randomCandidates(rng *rand.Rand, prepared *imageutil.PreparedImage, count i
 	out := make([]model.Candidate, 0, count)
 	w := float32(prepared.Width)
 	h := float32(prepared.Height)
-	diag := float32(math.Sqrt(float64(prepared.Width*prepared.Width) + float64(prepared.Height*prepared.Height)))
-
-	if progress < 0 {
-		progress = 0
-	}
-	if progress > 1 {
-		progress = 1
-	}
-	// Progressive scale decay: starts at 0.25 * diag and smoothly decays to 0.05 * diag.
-	scaleFactor := float32(0.25 - 0.20*math.Pow(float64(progress), 1.5))
-	maxRadius := diag * scaleFactor
-	if maxRadius < 4 {
-		maxRadius = 4
-	}
+	maxRadius := progressiveMaxRadius(prepared.Width, prepared.Height, progress)
 	minRadius := float32(2)
 
 	for i := 0; i < count; i++ {
@@ -540,48 +576,7 @@ func randomCandidates(rng *rand.Rand, prepared *imageutil.PreparedImage, count i
 	return out
 }
 
-// mutatedCandidates only perturbs geometry. Colors are recomputed by the
-// GPU on each evaluation, so seeding them on the CPU side would be wasted
-// work (and would constrain the search).
-func mutatedCandidates(rng *rand.Rand, prepared *imageutil.PreparedImage, base model.Candidate, count int, forceOpaque bool, moveStep, radiusStep float32) []model.Candidate {
-	out := make([]model.Candidate, 0, count)
-	w := float32(prepared.Width)
-	h := float32(prepared.Height)
-	for i := 0; i < count; i++ {
-		cand := base
-		cand.X += randRange(rng, -moveStep, moveStep)
-		cand.Y += randRange(rng, -moveStep, moveStep)
-		if cand.X < 0 {
-			cand.X = 0
-		}
-		if cand.Y < 0 {
-			cand.Y = 0
-		}
-		if cand.X > w-1 {
-			cand.X = w - 1
-		}
-		if cand.Y > h-1 {
-			cand.Y = h - 1
-		}
-		cand.RX = float32(math.Max(1, float64(cand.RX+randRange(rng, -radiusStep, radiusStep))))
-		cand.RY = float32(math.Max(1, float64(cand.RY+randRange(rng, -radiusStep, radiusStep))))
-		cand.Theta += randRange(rng, -30, 30)
-		if cand.Theta < 0 {
-			cand.Theta += 360
-		}
-		if cand.Theta >= 360 {
-			cand.Theta -= 360
-		}
-		if forceOpaque {
-			cand.A = 1.0
-		}
-		out = append(out, cand)
-	}
-	if len(out) == 0 {
-		out = append(out, base)
-	}
-	return out
-}
+
 
 // submitAndPickBest submits a candidate batch, waits for the result and
 // returns the lowest-score candidate with its GPU-computed optimal color

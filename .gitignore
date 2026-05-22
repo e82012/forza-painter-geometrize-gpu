@@ -1,2 +1,5 @@
 demo/*.json
-*.exe
+OpenCL-SDK/
+img_json/
+img_pre/
+settings/temp_web.ini
