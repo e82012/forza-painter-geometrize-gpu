@@ -449,6 +449,8 @@ __kernel void compute_error_grid(
     __global const float4* target,
     __global const float4* current,
     __global const uchar* opaqueMask,
+    __global const float* edgeMap,
+    const float edgeWeight,
     __global float* gridOut,
     const int width,
     const int height,
@@ -480,7 +482,14 @@ __kernel void compute_error_grid(
             float dg = t.y - s.y;
             float db = t.z - s.z;
             float da = t.w - s.w;
-            sum += dr * dr + dg * dg + db * db + da * da;
+            float pixelError = dr * dr + dg * dg + db * db + da * da;
+            
+            if (edgeWeight > 0.0f) {
+                float edgeBoost = 1.0f + edgeWeight * edgeMap[p];
+                pixelError *= edgeBoost;
+            }
+            
+            sum += pixelError;
         }
     }
     gridOut[gy * gridW + gx] = sum;

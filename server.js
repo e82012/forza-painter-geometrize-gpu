@@ -344,7 +344,9 @@ stopAt = ${config.stopAt}
           path.join('img_pre', reqData.filename),
           '-preview', path.join('img_preview', 'web_preview.png'),
           '-settings', path.join('settings', 'temp_web.ini'),
-          '-output', path.join('img_json', base)
+          '-output', path.join('img_json', base),
+          '-multiscale',
+          '-edge-weight', '3.0'
         ];
 
         currentJob = spawn(execPath, args, { cwd: __dirname });

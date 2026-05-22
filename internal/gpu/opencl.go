@@ -112,6 +112,9 @@ type Evaluator struct {
 	maxCandidates int
 	gridW         int
 	gridH         int
+
+	edgeMapBuffer *cl.MemObject
+	edgeWeight    float32
 }
 
 func NewEvaluator(target, current []float32, mask []uint8, width, height int, maxCandidates int) (*Evaluator, error) {
@@ -308,6 +311,10 @@ func NewEvaluator(target, current []float32, mask []uint8, width, height int, ma
 		cleanup()
 		return nil, err
 	}
+	if e.edgeMapBuffer, err = ctx.CreateEmptyBuffer(cl.MemReadOnly, 4); err != nil {
+		cleanup()
+		return nil, err
+	}
 
 	for i := 0; i < ringSize; i++ {
 		buf, bErr := ctx.CreateEmptyBuffer(cl.MemReadOnly, maxCandidates*6*4)
@@ -377,6 +384,9 @@ func (e *Evaluator) Close() {
 		if e.candBuffers[i] != nil {
 			e.candBuffers[i].Release()
 		}
+	}
+	if e.edgeMapBuffer != nil {
+		e.edgeMapBuffer.Release()
 	}
 	if e.maskBuffer != nil {
 		e.maskBuffer.Release()
@@ -695,6 +705,8 @@ func (e *Evaluator) SubmitErrorGrid() (GridTicket, error) {
 		e.targetBuffer,
 		e.currentBuffer,
 		e.maskBuffer,
+		e.edgeMapBuffer,
+		e.edgeWeight,
 		e.errorGridBufs[slot],
 		int32(e.width),
 		int32(e.height),
@@ -823,6 +835,23 @@ func scoreDevice(d *cl.Device) int64 {
 	} else if strings.Contains(vendor, "intel") {
 		score += 1_000_000_000
 	}
-
 	return score
+}
+
+// SetEdgeMap uploads the edge intensity map to the GPU
+func (e *Evaluator) SetEdgeMap(edgeMap []float32, weight float32) error {
+	if e.edgeMapBuffer != nil {
+		e.edgeMapBuffer.Release()
+	}
+	buf, err := e.context.CreateEmptyBuffer(cl.MemReadOnly, len(edgeMap)*4)
+	if err != nil {
+		return err
+	}
+	e.edgeMapBuffer = buf
+	e.edgeWeight = weight
+	evt, err := e.queue.EnqueueWriteBufferFloat32(e.edgeMapBuffer, true, 0, edgeMap, nil)
+	if evt != nil {
+		evt.Release()
+	}
+	return err
 }

@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"forza-painter-geometrize-go/internal/config"
 	"forza-painter-geometrize-go/internal/gpu"
 	"forza-painter-geometrize-go/internal/imageutil"
 	"forza-painter-geometrize-go/internal/model"
@@ -22,7 +21,10 @@ type Options struct {
 	OutputPath    string
 	PreviewPath   string
 	WorkspaceRoot string
-	Seed          int64
+	Seed             int64
+	EdgeWeight       float64
+	MultiScale       bool
+	SavePassPreviews bool
 }
 
 const (
@@ -38,34 +40,26 @@ const (
 	minHillClimbRounds  = 1
 )
 
-func Run(opts Options) error {
-	if opts.ImagePath == "" {
-		return fmt.Errorf("image path is required")
-	}
-	if opts.WorkspaceRoot == "" {
-		opts.WorkspaceRoot = "."
-	}
-
-	settingsPath, err := config.ResolveSettingsPath(opts.WorkspaceRoot, opts.SettingsPath, opts.Profile)
-	if err != nil {
-		return err
-	}
-	cfg, err := config.ParseSettings(settingsPath)
-	if err != nil {
-		return err
-	}
-
-	prepared, err := imageutil.LoadAndPrepare(opts.ImagePath, cfg.MaxResolution)
-	if err != nil {
-		return err
-	}
-
+func runSinglePass(opts Options, cfg model.Settings, prepared *imageutil.PreparedImage) error {
 	maxBatch := cfg.RandomSamples
 	if cfg.MutatedSamples > maxBatch {
 		maxBatch = cfg.MutatedSamples
 	}
 	evaluator, err := gpu.NewEvaluator(prepared.Target, prepared.Current, prepared.OpaqueMask, prepared.Width, prepared.Height, maxBatch)
-	// fmt.Println("")
+	if err != nil {
+		return err
+	}
+	defer evaluator.Close()
+
+	if cfg.EdgeWeight > 0 {
+		edgeMap := ComputeEdgeMap(prepared.Target, prepared.Width, prepared.Height)
+		if err := evaluator.SetEdgeMap(edgeMap, float32(cfg.EdgeWeight)); err != nil {
+			return err
+		}
+		fmt.Printf("[EdgeGuided] Edge map computed and uploaded to GPU, weight=%.1f\n", cfg.EdgeWeight)
+	}
+
+	evaluator.UseWorkGroupEval = cfg.UseWorkGroupEval
 
 	// fmt.Println("=== Progressive Sampling ===")
 
@@ -105,7 +99,6 @@ func Run(opts Options) error {
 	// 	return err
 	// }
 	evaluator.UseWorkGroupEval = cfg.UseWorkGroupEval
-	defer evaluator.Close()
 
 	rng := rand.New(rand.NewSource(seedValue(opts.Seed)))
 	currentError, opaquePixels := computeTotalError(prepared.Target, prepared.Current, prepared.OpaqueMask)
@@ -157,7 +150,8 @@ func Run(opts Options) error {
 		// fmt.Printf("[%d/%d] Scoring sample step: %d\n",
 		// 	step, cfg.StopAt, evaluator.SampleStep)
 
-		randomCands := randomCandidates(rng, prepared, cfg.RandomSamples, cfg.ForceOpaqueShapes, sampler, progress)
+		maxRad := progressiveMaxRadius(prepared.Width, prepared.Height, progress)
+		randomCands := randomCandidates(rng, prepared, cfg.RandomSamples, cfg.ForceOpaqueShapes, sampler, 2.0, maxRad)
 
 		fmt.Printf("[%d/%d] Evaluating random sample batch on OpenCL (%d)...\n", step, cfg.StopAt, len(randomCands))
 		best, bestScore, err := submitAndPickBest(evaluator, randomCands)
@@ -529,12 +523,10 @@ func (s *errorSampler) sample(rng *rand.Rand) (float32, float32) {
 // angle) is randomized; color is left zero because the GPU evaluator
 // computes the optimal color analytically and writes it back in the
 // EvalResult.
-func randomCandidates(rng *rand.Rand, prepared *imageutil.PreparedImage, count int, forceOpaque bool, sampler *errorSampler, progress float32) []model.Candidate {
+func randomCandidates(rng *rand.Rand, prepared *imageutil.PreparedImage, count int, forceOpaque bool, sampler *errorSampler, minRadius, maxRadius float32) []model.Candidate {
 	out := make([]model.Candidate, 0, count)
 	w := float32(prepared.Width)
 	h := float32(prepared.Height)
-	maxRadius := progressiveMaxRadius(prepared.Width, prepared.Height, progress)
-	minRadius := float32(2)
 
 	for i := 0; i < count; i++ {
 		x, y := sampler.sample(rng)

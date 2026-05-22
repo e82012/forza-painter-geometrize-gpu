@@ -31,6 +31,9 @@ func DefaultSettings() model.Settings {
 		ProgressiveSamplingEnd:        1,
 		ProgressiveSamplingTransition: 0.333,
 		ProgressiveSamplingCurve:      2.5,
+		EdgeWeight:                    0.0,
+		MultiScale:                    false,
+		SavePassPreviews:              false,
 	}
 }
 
@@ -123,6 +126,12 @@ func ParseSettings(path string) (model.Settings, error) {
 
 		case "progressiveSamplingCurve":
 			cfg.ProgressiveSamplingCurve = parseFloat(value, cfg.ProgressiveSamplingCurve)
+		case "edgeWeight":
+			cfg.EdgeWeight = float64(parseFloat(value, float32(cfg.EdgeWeight)))
+		case "multiScale":
+			cfg.MultiScale = parseBool(value, cfg.MultiScale)
+		case "savePassPreviews":
+			cfg.SavePassPreviews = parseBool(value, cfg.SavePassPreviews)
 		}
 	}
 	if err := scanner.Err(); err != nil {

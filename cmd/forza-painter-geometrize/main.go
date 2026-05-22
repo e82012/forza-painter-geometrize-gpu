@@ -17,8 +17,11 @@ func main() {
 	outputPath := flag.String("output", "", "Output path prefix (default: input image path)")
 	previewPath := flag.String("preview", "", "Optional preview PNG output path")
 	seed := flag.Int64("seed", 0, "Optional RNG seed for reproducible output")
+	edgeWeight := flag.Float64("edge-weight", -1.0, "Edge-guided sampling weight (0=disabled, recommended: 2.0~5.0)")
+	multiScale := flag.Bool("multiscale", false, "Enable multi-scale hierarchical fitting")
+	savePassPreviews := flag.Bool("save-pass-previews", false, "Save preview image after each pass")
 	flag.Parse()
-	applyTrailingOptions(flag.Args()[1:], settingsPath, profile, outputPath, previewPath, seed)
+	applyTrailingOptions(flag.Args()[1:], settingsPath, profile, outputPath, previewPath, seed, edgeWeight, multiScale, savePassPreviews)
 
 	if flag.NArg() < 1 {
 		fmt.Println("Usage: forza-painter-geometrize [--settings path.ini|--profile name] [--output path] [--preview path] [--seed n] <image-path>")
@@ -36,6 +39,9 @@ func main() {
 		PreviewPath:   normalizePreviewPath(*previewPath),
 		WorkspaceRoot: absRoot,
 		Seed:          *seed,
+		EdgeWeight:       *edgeWeight,
+		MultiScale:       *multiScale,
+		SavePassPreviews: *savePassPreviews,
 	}
 
 	if err := engine.Run(opts); err != nil {
@@ -74,7 +80,7 @@ func normalizePreviewPath(path string) string {
 	return abs
 }
 
-func applyTrailingOptions(extra []string, settingsPath, profile, outputPath, previewPath *string, seed *int64) {
+func applyTrailingOptions(extra []string, settingsPath, profile, outputPath, previewPath *string, seed *int64, edgeWeight *float64, multiScale, savePassPreviews *bool) {
 	for i := 0; i < len(extra); i++ {
 		arg := extra[i]
 		next := func() (string, bool) {
@@ -109,6 +115,17 @@ func applyTrailingOptions(extra []string, settingsPath, profile, outputPath, pre
 					*seed = parsed
 				}
 			}
+		case "--edge-weight", "-edge-weight":
+			if v, ok := next(); ok {
+				var parsed float64
+				if _, err := fmt.Sscanf(v, "%f", &parsed); err == nil {
+					*edgeWeight = parsed
+				}
+			}
+		case "--multiscale", "-multiscale":
+			*multiScale = true
+		case "--save-pass-previews", "-save-pass-previews":
+			*savePassPreviews = true
 		}
 	}
 }

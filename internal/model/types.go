@@ -19,6 +19,18 @@ type Settings struct {
 	ProgressiveSamplingEnd        int
 	ProgressiveSamplingTransition float32
 	ProgressiveSamplingCurve      float32
+	EdgeWeight                    float64
+	MultiScale                    bool
+	SavePassPreviews              bool
+}
+
+type PassConfig struct {
+	Name           string
+	ScaleSize      int
+	ShapeCount     int
+	MinRadius      float64
+	MaxRadius      float64
+	EdgeWeight     float64
 }
 
 type Shape struct {
