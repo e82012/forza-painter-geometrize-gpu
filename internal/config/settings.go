@@ -31,6 +31,7 @@ func DefaultSettings() model.Settings {
 		ProgressiveSamplingEnd:        1,
 		ProgressiveSamplingTransition: 0.333,
 		ProgressiveSamplingCurve:      2.5,
+		ErrorGridSize:                 64,
 	}
 }
 
@@ -123,6 +124,8 @@ func ParseSettings(path string) (model.Settings, error) {
 
 		case "progressiveSamplingCurve":
 			cfg.ProgressiveSamplingCurve = parseFloat(value, cfg.ProgressiveSamplingCurve)
+		case "errorGridSize":
+			cfg.ErrorGridSize = parseInt(value, cfg.ErrorGridSize)
 		}
 	}
 	if err := scanner.Err(); err != nil {

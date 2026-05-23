@@ -64,7 +64,8 @@ func Run(opts Options) error {
 	if cfg.MutatedSamples > maxBatch {
 		maxBatch = cfg.MutatedSamples
 	}
-	evaluator, err := gpu.NewEvaluator(prepared.Target, prepared.Current, prepared.OpaqueMask, prepared.Width, prepared.Height, maxBatch)
+	gridSize := cfg.ErrorGridSize
+	evaluator, err := gpu.NewEvaluator(prepared.Target, prepared.Current, prepared.OpaqueMask, prepared.Width, prepared.Height, maxBatch, gridSize)
 	// fmt.Println("")
 
 	// fmt.Println("=== Progressive Sampling ===")

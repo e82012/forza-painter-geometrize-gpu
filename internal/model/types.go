@@ -19,6 +19,7 @@ type Settings struct {
 	ProgressiveSamplingEnd        int
 	ProgressiveSamplingTransition float32
 	ProgressiveSamplingCurve      float32
+	ErrorGridSize                 int
 }
 
 type Shape struct {

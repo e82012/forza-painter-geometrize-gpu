@@ -11,9 +11,9 @@ import (
 	"github.com/jgillich/go-opencl/cl"
 )
 
-// ErrorGridSize is the side length of the downsampled error histogram used
-// for biasing random candidate placement towards high-error regions.
-const ErrorGridSize = 64
+// ErrorGridSize is the default side length of the downsampled error histogram.
+// Overridable via settings.ini errorGridSize.
+const DefaultErrorGridSize = 64
 
 // ringSize is the number of candidate / result / grid host+device staging
 // buffers kept in flight. With size 3 the engine can submit work for the
@@ -114,7 +114,7 @@ type Evaluator struct {
 	gridH         int
 }
 
-func NewEvaluator(target, current []float32, mask []uint8, width, height int, maxCandidates int) (*Evaluator, error) {
+func NewEvaluator(target, current []float32, mask []uint8, width, height, maxCandidates, gridSize int) (*Evaluator, error) {
 	if len(target) != len(current) {
 		return nil, fmt.Errorf("target/current length mismatch")
 	}
@@ -233,8 +233,8 @@ func NewEvaluator(target, current []float32, mask []uint8, width, height int, ma
 		return nil, err
 	}
 
-	gridW := ErrorGridSize
-	gridH := ErrorGridSize
+	gridW := gridSize
+	gridH := gridSize
 	if width < gridW {
 		gridW = width
 	}
