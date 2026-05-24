@@ -445,7 +445,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"unsafe"
@@ -621,9 +620,6 @@ func newVulkanBackend(target, current []float32, maskData []uint8, width, height
 		return nil, fmt.Errorf("mask size mismatch: got %d, expected %d", len(maskData), width*height)
 	}
 
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
 	vulkanInitOnce.Do(func() {
 		if err := ensureVulkanLoaded(); err != nil {
 			vulkanInitErr = err
@@ -680,16 +676,21 @@ func newVulkanBackend(target, current []float32, maskData []uint8, width, height
 		sampleStep:     1,
 	}
 
-	maskF32 := make([]float32, len(maskData))
+	// Pack the per-pixel opaque mask into 1-bit-per-pixel words.
+	// shaders read it via bit-test, which is dramatically cheaper than
+	// fetching a whole float per pixel. Each uint32 stores 32 pixels:
+	// pixel p is opaque iff (mask[p>>5] >> (p & 31)) & 1.
+	maskPackedLen := (v.pixelCount + 31) / 32
+	maskPacked := make([]uint32, maskPackedLen)
 	for i, m := range maskData {
 		if m != 0 {
-			maskF32[i] = 1
+			maskPacked[i>>5] |= 1 << (uint(i) & 31)
 		}
 	}
 
 	targetSize := len(target) * 4
 	currentSize := len(current) * 4
-	maskSize := len(maskF32) * 4
+	maskSize := maskPackedLen * 4
 	candSize := maxCandidates * 6 * 4
 	resultSize := maxCandidates * 4 * 4
 	gridBufSize := gridW * gridH * 4
@@ -746,9 +747,11 @@ func newVulkanBackend(target, current []float32, maskData []uint8, width, height
 		cleanup()
 		return nil, fmt.Errorf("upload current: %w", err)
 	}
-	if err := v.upload(maskF32, v.maskBuf, maskSize); err != nil {
-		cleanup()
-		return nil, fmt.Errorf("upload mask: %w", err)
+	if maskSize > 0 {
+		if err := v.uploadRaw(unsafe.Pointer(&maskPacked[0]), v.maskBuf, maskSize); err != nil {
+			cleanup()
+			return nil, fmt.Errorf("upload mask: %w", err)
+		}
 	}
 
 	for i := 0; i < ringSize; i++ {
@@ -913,8 +916,6 @@ func (v *vulkanBackend) Close() error {
 		return nil
 	}
 	v.closed = true
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
 	_ = v.Flush()
 	v.destroy()
 	return nil
@@ -924,8 +925,6 @@ func (v *vulkanBackend) Flush() error {
 	if v.device == nil {
 		return nil
 	}
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
 	C.rawVkDeviceWaitIdle(v.device)
 	for i := 0; i < ringSize; i++ {
 		if v.applySlots[i].busy {
@@ -978,9 +977,6 @@ func (v *vulkanBackend) SubmitEval(cands []model.Candidate) (EvalTicket, error) 
 	if count > v.maxCandidates {
 		return EvalTicket{}, fmt.Errorf("candidate count %d exceeds max %d", count, v.maxCandidates)
 	}
-
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
 
 	slot := v.nextEvalSlot
 	v.nextEvalSlot = (v.nextEvalSlot + 1) % ringSize
@@ -1099,9 +1095,6 @@ func (v *vulkanBackend) Evaluate(cands []model.Candidate) ([]EvalResult, error) 
 }
 
 func (v *vulkanBackend) SubmitApply(candidate model.Candidate) error {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
 	rx := candidate.RX
 	ry := candidate.RY
 	if rx < 1 {
@@ -1192,8 +1185,6 @@ func (v *vulkanBackend) Apply(candidate model.Candidate) error {
 }
 
 func (v *vulkanBackend) SubmitErrorGrid() (GridTicket, error) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
 	slot := v.nextGridSlot
 	v.nextGridSlot = (v.nextGridSlot + 1) % ringSize
 	if v.gridSlots[slot].busy {
@@ -1370,9 +1361,19 @@ func (v *vulkanBackend) waitFence(slot int) error {
 }
 
 func (v *vulkanBackend) upload(data []float32, dstBuf vkBuffer, size int) error {
-	src := unsafe.Slice((*byte)(v.stagingMapped), size)
-	dst := unsafe.Slice((*byte)(unsafe.Pointer(&data[0])), size)
-	copy(src, dst)
+	if size <= 0 {
+		return nil
+	}
+	return v.uploadRaw(unsafe.Pointer(&data[0]), dstBuf, size)
+}
+
+func (v *vulkanBackend) uploadRaw(srcPtr unsafe.Pointer, dstBuf vkBuffer, size int) error {
+	if size <= 0 {
+		return nil
+	}
+	dstStaging := unsafe.Slice((*byte)(v.stagingMapped), size)
+	srcBytes := unsafe.Slice((*byte)(srcPtr), size)
+	copy(dstStaging, srcBytes)
 	if err := v.resetTransferFence(); err != nil {
 		return err
 	}

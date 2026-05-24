@@ -32,7 +32,11 @@ foreach ($s in $shaders) {
     $srcPath = Join-Path $shaderDir $s.src
     $spvPath = Join-Path $shaderDir $s.spv
     Write-Host "  $($s.src) -> $($s.spv)"
-    & glslc -fshader-stage=compute $srcPath -o $spvPath
+    # -O performs the standard optimization passes (DCE, register-promotion,
+    # CFG cleanup). Without it the shipped SPIR-V keeps every accumulator in
+    # a stack slot so each per-pixel iteration in eval_v3/v4 hits global
+    # memory, which trashed performance on the Vulkan backend.
+    & glslc -O --target-env=vulkan1.2 -fshader-stage=compute $srcPath -o $spvPath
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to compile $($s.src)"
     }

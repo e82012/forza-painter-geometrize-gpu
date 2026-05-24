@@ -5,7 +5,7 @@
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(std430, set = 0, binding = 1) buffer       CurrentBuf { vec4 current[]; };
-layout(std430, set = 0, binding = 2) readonly buffer MaskBuf    { float mask[]; };
+layout(std430, set = 0, binding = 2) readonly buffer MaskBuf    { uint mask[]; };
 
 layout(push_constant) uniform Params {
     int   width;
@@ -36,7 +36,7 @@ void main() {
     int x = xMin + lx;
     int y = yMin + ly;
     int p = y * width + x;
-    if (mask[p] == 0.0) {
+    if ((mask[p >> 5] & (1u << (uint(p) & 31u))) == 0u) {
         return;
     }
 
