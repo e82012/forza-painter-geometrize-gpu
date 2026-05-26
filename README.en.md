@@ -31,6 +31,8 @@ The `feature/edge-guided-sampling` branch introduces the following adjustments a
 ### 5. Ring Buffer Pipelining Optimization
 * **Description**: Uses a dual-buffer/ring-buffer asynchronous execution pipeline (`ringSize = 3`) to allow the CPU to perform CMA-ES sampling while the GPU concurrently applies the previous shape and computes the error grid, improving parallel execution efficiency.
 
+### 6. Forza Livery Memory Injector
+* **Description**: Adds a dedicated "Memory Injector" tab page. It supports selecting from local historically generated JSON files or uploading custom external JSON shape files. The Node.js backend safely triggers the Windows memory writing engine to hot-inject geometry data directly into the active Forza livery editor table in VRAM, eliminating manual drawing and rendering shapes instantly.
 
 ---
 
@@ -90,4 +92,23 @@ This branch provides a browser-based dashboard to easily operate the engine and 
    ```
 3. Once started, the dashboard will open automatically in your default browser at `http://localhost:8080` (if not, open it manually).
 4. Upload an image, choose a quality profile (Low, Medium, High) or customize parameters, and click "Start" to see the canvas updates and engine logs in real-time.
+
+---
+
+### 🚗 In-Game Livery Memory Injector
+
+You can write the generated JSON shape data directly into the active game memory of *Forza* by switching to the "Memory Injector" tab at the top of the Web UI.
+
+#### Prerequisites
+1. **Python 3**: Make sure Python 3 is installed and added to your system environment variables (type `python --version` in terminal to verify).
+2. **Administrator Privileges**: **Must run with administrator privileges**: Execute `start_server.bat` as Administrator (or launch `node server.js` from an elevated CMD/PowerShell window). Otherwise, the memory engine will be blocked from writing to the game process.
+3. **Livery Editor State**: Launch *Forza*, head to "Apply Decals & Shapes" livery editor page, create a layer group with enough empty layers, and stay in editor mode.
+
+#### How to Use
+1. Switch to the **"Memory Injector"** tab in the Web UI navigation.
+2. Select your JSON source:
+   * **Local JSON**: Select from the list of historically generated local JSON files in the `img_json/` directory.
+   * **Upload JSON**: Drag and drop or click to upload any external custom JSON file matching Geometrize specifications.
+3. Click **"Start Injecting (Inject)"**. Monitor the VRAM base address scanning and layer writing logs in real-time in the terminal console.
+4. Once completed, return to the game livery editor screen to see the rendered sticker. If needed, click "Stop Injecting" to safely kill the background injection process.
 

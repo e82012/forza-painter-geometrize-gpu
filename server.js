@@ -506,6 +506,146 @@ stopAt = ${config.stopAt}
   }
 
   // ----------------------------------------------------
+  // 已生成 JSON 清單 API
+  // ----------------------------------------------------
+  if (req.method === 'GET' && pathname === '/api/json-list') {
+    const jsonDir = path.join(__dirname, 'img_json');
+    fs.readdir(jsonDir, (err, files) => {
+      if (err) {
+        if (err.code === 'ENOENT') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'success', files: [] }));
+          return;
+        }
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'error', message: err.message }));
+        return;
+      }
+      const jsonFiles = files.filter(f => f.toLowerCase().endsWith('.json'));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'success', files: jsonFiles }));
+    });
+    return;
+  }
+
+  // ----------------------------------------------------
+  // 外部 JSON 上傳 API (流式接收)
+  // ----------------------------------------------------
+  if (req.method === 'POST' && pathname === '/api/inject-upload') {
+    const rawFilename = req.headers['x-filename'] || 'upload.json';
+    const filename = decodeURIComponent(rawFilename);
+    const ext = path.extname(filename);
+    const base = path.basename(filename, ext);
+    
+    const safeName = `${base}_${Date.now()}.json`;
+    const targetPath = path.join(__dirname, 'img_json', safeName);
+
+    // 確保 target 資料夾存在
+    const jsonDir = path.dirname(targetPath);
+    if (!fs.existsSync(jsonDir)) {
+      fs.mkdirSync(jsonDir, { recursive: true });
+    }
+
+    const writeStream = fs.createWriteStream(targetPath);
+    req.pipe(writeStream);
+
+    let responded = false;
+    const sendError = (errMessage) => {
+      if (responded) return;
+      responded = true;
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'error', message: errMessage }));
+    };
+
+    req.on('error', (err) => {
+      sendError(err.message);
+    });
+
+    writeStream.on('error', (err) => {
+      sendError(err.message);
+    });
+
+    writeStream.on('finish', () => {
+      if (responded) return;
+      responded = true;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'success', filename: safeName }));
+    });
+    return;
+  }
+
+  // ----------------------------------------------------
+  // 串流注入日誌 API (Server-Sent Events)
+  // ----------------------------------------------------
+  if (req.method === 'GET' && pathname === '/api/inject-stream') {
+    const filename = parsedUrl.searchParams.get('file');
+    if (!filename) {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('缺少 file 參數');
+      return;
+    }
+
+    const safeFilename = path.basename(filename);
+    const jsonPath = path.join(__dirname, 'img_json', safeFilename);
+
+    if (!fs.existsSync(jsonPath)) {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('找不到指定的 JSON 檔案');
+      return;
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no'
+    });
+
+    const pythonScript = path.join(__dirname, 'tools', 'fh6_import_layer_table.py');
+    const pyProcess = spawn('python', [pythonScript, '--json', jsonPath], { cwd: __dirname });
+
+    let responseEnded = false;
+    const endResponse = (code) => {
+      if (responseEnded) return;
+      responseEnded = true;
+      res.write(`data: ${JSON.stringify({ done: true, code })}\n\n`);
+      res.end();
+    };
+
+    const sendLog = (data) => {
+      if (responseEnded) return;
+      const lines = data.toString().split('\n');
+      lines.forEach(line => {
+        if (line.trim()) {
+          res.write(`data: ${JSON.stringify({ log: line.trim() })}\n\n`);
+        }
+      });
+    };
+
+    pyProcess.stdout.on('data', sendLog);
+    pyProcess.stderr.on('data', sendLog);
+
+    pyProcess.on('error', (err) => {
+      if (!responseEnded) {
+        res.write(`data: ${JSON.stringify({ log: `[ERROR] 無法啟動 Python 注入進程 (請確認本機已安裝 Python 並將其加入環境變數): ${err.message}` })}\n\n`);
+      }
+      endResponse(-1);
+    });
+
+    pyProcess.on('close', (code) => {
+      endResponse(code);
+    });
+
+    req.on('close', () => {
+      if (!responseEnded) {
+        pyProcess.kill('SIGKILL');
+      }
+    });
+
+    return;
+  }
+
+  // ----------------------------------------------------
   // 404 未找到
   // ----------------------------------------------------
   res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });

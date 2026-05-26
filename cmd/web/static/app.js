@@ -424,6 +424,347 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // ====================================================
+  // 記憶體注入器 DOM 元素與邏輯
+  // ====================================================
+  const tabBtnGenerator = document.getElementById('tabBtnGenerator');
+  const tabBtnInjector = document.getElementById('tabBtnInjector');
+  const tabGenerator = document.getElementById('tab-generator');
+  const tabInjector = document.getElementById('tab-injector');
+
+  const btnModeSelect = document.getElementById('btnModeSelect');
+  const btnModeUpload = document.getElementById('btnModeUpload');
+  const modeSelectSection = document.getElementById('modeSelectSection');
+  const modeUploadSection = document.getElementById('modeUploadSection');
+
+  const jsonSelect = document.getElementById('jsonSelect');
+  const jsonDropZone = document.getElementById('jsonDropZone');
+  const jsonFileInput = document.getElementById('jsonFileInput');
+  const jsonUploadPreviewContainer = document.getElementById('jsonUploadPreviewContainer');
+  const btnRemoveJsonFile = document.getElementById('btnRemoveJsonFile');
+  const jsonFilenameText = document.getElementById('jsonFilenameText');
+  const jsonUploadPrompt = jsonDropZone ? jsonDropZone.querySelector('.upload-prompt') : null;
+
+  const btnInject = document.getElementById('btnInject');
+  const btnStopInject = document.getElementById('btnStopInject');
+  const injectorLogConsole = document.getElementById('injectorLogConsole');
+
+  // 注入狀態變數
+  let injectEventSource = null;
+  let selectedInjectFilename = '';
+  let isUploadingJson = false;
+  let uploadedJsonFilename = '';
+
+  // ----------------------------------------------------
+  // 分頁切換邏輯
+  // ----------------------------------------------------
+  function switchTab(tabName) {
+    if (tabName === 'generator') {
+      tabBtnGenerator.classList.add('active');
+      tabBtnGenerator.setAttribute('aria-selected', 'true');
+      tabBtnInjector.classList.remove('active');
+      tabBtnInjector.setAttribute('aria-selected', 'false');
+
+      tabGenerator.classList.add('active');
+      tabGenerator.classList.remove('hidden');
+      tabInjector.classList.add('hidden');
+      tabInjector.classList.remove('active');
+    } else {
+      tabBtnInjector.classList.add('active');
+      tabBtnInjector.setAttribute('aria-selected', 'true');
+      tabBtnGenerator.classList.remove('active');
+      tabBtnGenerator.setAttribute('aria-selected', 'false');
+
+      tabInjector.classList.add('active');
+      tabInjector.classList.remove('hidden');
+      tabGenerator.classList.add('hidden');
+      tabGenerator.classList.remove('active');
+
+      // 切換至注入分頁時，自動載入本機生成的 JSON 清單
+      loadJsonList();
+    }
+  }
+
+  tabBtnGenerator.addEventListener('click', () => switchTab('generator'));
+  tabBtnInjector.addEventListener('click', () => switchTab('injector'));
+
+  // ----------------------------------------------------
+  // 載入本機生成的 JSON 檔案清單
+  // ----------------------------------------------------
+  function loadJsonList() {
+    jsonSelect.innerHTML = '<option value="">載入中...</option>';
+    fetch('/api/json-list')
+      .then(res => res.json())
+      .then(data => {
+        if (data.status === 'success') {
+          if (data.files.length === 0) {
+            jsonSelect.innerHTML = '<option value="">(尚未生成任何 JSON 檔案)</option>';
+            selectedInjectFilename = '';
+            updateInjectButtonState();
+            return;
+          }
+
+          jsonSelect.innerHTML = '<option value="">-- 請選擇一個幾何 JSON 檔案 --</option>' +
+            data.files.map(f => `<option value="${f}">${f}</option>`).join('');
+
+          if (btnModeSelect.classList.contains('active')) {
+            selectedInjectFilename = jsonSelect.value;
+            updateInjectButtonState();
+          }
+        } else {
+          jsonSelect.innerHTML = '<option value="">無法加載檔案清單</option>';
+        }
+      })
+      .catch(err => {
+        console.error('取得 JSON 清單失敗:', err);
+        jsonSelect.innerHTML = '<option value="">載入失敗，請重試</option>';
+      });
+  }
+
+  jsonSelect.addEventListener('change', () => {
+    selectedInjectFilename = jsonSelect.value;
+    updateInjectButtonState();
+  });
+
+  // ----------------------------------------------------
+  // 匯入模式切換 (選擇 vs 上傳)
+  // ----------------------------------------------------
+  btnModeSelect.addEventListener('click', () => {
+    btnModeSelect.classList.add('active');
+    btnModeUpload.classList.remove('active');
+    modeSelectSection.classList.remove('hidden');
+    modeUploadSection.classList.add('hidden');
+
+    selectedInjectFilename = jsonSelect.value;
+    updateInjectButtonState();
+  });
+
+  btnModeUpload.addEventListener('click', () => {
+    btnModeUpload.classList.add('active');
+    btnModeSelect.classList.remove('active');
+    modeUploadSection.classList.remove('hidden');
+    modeSelectSection.classList.add('hidden');
+
+    selectedInjectFilename = uploadedJsonFilename;
+    updateInjectButtonState();
+  });
+
+  // ----------------------------------------------------
+  // Drag & Drop 上傳外部 JSON 處理
+  // ----------------------------------------------------
+  if (jsonDropZone) {
+    jsonDropZone.addEventListener('click', (e) => {
+      if (e.target !== btnRemoveJsonFile && !btnRemoveJsonFile.contains(e.target)) {
+        jsonFileInput.click();
+      }
+    });
+
+    ['dragenter', 'dragover'].forEach(eventName => {
+      jsonDropZone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        jsonDropZone.classList.add('dragover');
+      }, false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+      jsonDropZone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        jsonDropZone.classList.remove('dragover');
+      }, false);
+    });
+
+    jsonDropZone.addEventListener('drop', (e) => {
+      const dt = e.dataTransfer;
+      const files = dt.files;
+      if (files.length > 0) {
+        handleJsonFileSelect(files[0]);
+      }
+    });
+  }
+
+  if (jsonFileInput) {
+    jsonFileInput.addEventListener('change', (e) => {
+      if (jsonFileInput.files.length > 0) {
+        handleJsonFileSelect(jsonFileInput.files[0]);
+      }
+    });
+  }
+
+  if (btnRemoveJsonFile) {
+    btnRemoveJsonFile.addEventListener('click', (e) => {
+      e.stopPropagation();
+      resetJsonUploadZone();
+    });
+  }
+
+  function handleJsonFileSelect(file) {
+    if (!file.name.toLowerCase().endsWith('.json')) {
+      showToast('請上傳 JSON 格式的檔案！', 'error');
+      return;
+    }
+
+    jsonFilenameText.textContent = file.name;
+    jsonUploadPrompt.classList.add('hidden');
+    jsonUploadPreviewContainer.classList.remove('hidden');
+    jsonDropZone.classList.add('has-image');
+
+    uploadJsonFile(file);
+  }
+
+  function uploadJsonFile(file) {
+    showToast('正在上傳 JSON 貼紙檔案...', 'info');
+    btnInject.disabled = true;
+    isUploadingJson = true;
+
+    fetch('/api/inject-upload', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Filename': encodeURIComponent(file.name)
+      },
+      body: file
+    })
+    .then(res => {
+      if (!res.ok) throw new Error('上傳失敗');
+      return res.json();
+    })
+    .then(data => {
+      isUploadingJson = false;
+      if (data.status === 'success') {
+        uploadedJsonFilename = data.filename;
+        if (btnModeUpload.classList.contains('active')) {
+          selectedInjectFilename = uploadedJsonFilename;
+          updateInjectButtonState();
+        }
+        showToast('JSON 貼紙上傳成功，可開始注入！', 'success');
+      } else {
+        throw new Error(data.message || '上傳失敗');
+      }
+    })
+    .catch(err => {
+      isUploadingJson = false;
+      showToast('JSON 上傳失敗: ' + err.message, 'error');
+      resetJsonUploadZone();
+    });
+  }
+
+  function resetJsonUploadZone() {
+    jsonFileInput.value = '';
+    uploadedJsonFilename = '';
+    selectedInjectFilename = '';
+    jsonUploadPrompt.classList.remove('hidden');
+    jsonUploadPreviewContainer.classList.add('hidden');
+    jsonDropZone.classList.remove('has-image');
+    updateInjectButtonState();
+  }
+
+  function updateInjectButtonState() {
+    btnInject.disabled = !selectedInjectFilename || isUploadingJson || injectEventSource !== null;
+  }
+
+  // ----------------------------------------------------
+  // 記憶體注入執行 (Server-Sent Events 監聽)
+  // ----------------------------------------------------
+  if (btnInject) {
+    btnInject.addEventListener('click', () => {
+      if (!selectedInjectFilename) return;
+
+      btnInject.disabled = true;
+      btnStopInject.disabled = false;
+      
+      tabBtnGenerator.disabled = true;
+      btnModeSelect.disabled = true;
+      btnModeUpload.disabled = true;
+      jsonSelect.disabled = true;
+      if (jsonDropZone) jsonDropZone.style.pointerEvents = 'none';
+
+      injectorLogConsole.innerHTML = '<div class="log-line text-dim">準備向《極限競速》寫入記憶體...</div>' +
+        '<div class="log-line text-dim">正在嘗試尋找遊戲進程與圖層表基底地址...</div>';
+
+      const sseUrl = `/api/inject-stream?file=${encodeURIComponent(selectedInjectFilename)}`;
+      injectEventSource = new EventSource(sseUrl);
+
+      injectEventSource.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        if (data.log) {
+          const isScrolledToBottom = injectorLogConsole.scrollHeight - injectorLogConsole.clientHeight <= injectorLogConsole.scrollTop + 10;
+          
+          let lineClass = '';
+          // 語意化染色
+          if (data.log.includes('[ERROR]') || data.log.includes('Failed') || data.log.includes('error') || data.log.toLowerCase().includes('err')) {
+            lineClass = 'text-error';
+          } else if (data.log.includes('[SUCCESS]') || data.log.includes('Successfully') || data.log.includes('Done') || data.log.includes('寫入完成')) {
+            lineClass = 'text-success';
+          } else if (data.log.includes('[WARNING]') || data.log.includes('Warning')) {
+            lineClass = 'text-warning';
+          } else {
+            lineClass = 'text-dim';
+          }
+
+          const logDiv = document.createElement('div');
+          logDiv.className = `log-line ${lineClass}`;
+          logDiv.textContent = data.log;
+          injectorLogConsole.appendChild(logDiv);
+
+          if (isScrolledToBottom) {
+            injectorLogConsole.scrollTop = injectorLogConsole.scrollHeight;
+          }
+        }
+
+        if (data.done) {
+          closeInjectStream();
+          if (data.code === 0) {
+            showToast('記憶體注入完成！貼紙已即時顯示於遊戲中！', 'success');
+            sendNotification('Forza Geometrize', '記憶體車貼注入完成！');
+          } else {
+            showToast('注入程式中斷，請確認遊戲是否開啟，或是否以管理員權限啟動後端。', 'error');
+          }
+        }
+      };
+
+      injectEventSource.onerror = (err) => {
+        console.error('SSE 連線出錯:', err);
+        const logDiv = document.createElement('div');
+        logDiv.className = 'log-line text-error';
+        logDiv.textContent = '[ERROR] 與伺服器的串流連線中斷，注入作業終止。';
+        injectorLogConsole.appendChild(logDiv);
+        closeInjectStream();
+        showToast('注入連線中斷。', 'error');
+      };
+    });
+  }
+
+  if (btnStopInject) {
+    btnStopInject.addEventListener('click', () => {
+      if (injectEventSource) {
+        const logDiv = document.createElement('div');
+        logDiv.className = 'log-line text-warning';
+        logDiv.textContent = '[WARNING] 注入作業已被使用者手動中止。';
+        injectorLogConsole.appendChild(logDiv);
+        closeInjectStream();
+        showToast('注入作業已手動中止。', 'warning');
+      }
+    });
+  }
+
+  function closeInjectStream() {
+    if (injectEventSource) {
+      injectEventSource.close();
+      injectEventSource = null;
+    }
+    
+    btnStopInject.disabled = true;
+    
+    tabBtnGenerator.disabled = false;
+    btnModeSelect.disabled = false;
+    btnModeUpload.disabled = false;
+    jsonSelect.disabled = false;
+    if (jsonDropZone) jsonDropZone.style.pointerEvents = 'auto';
+
+    updateInjectButtonState();
+  }
+
   function escapeHtml(str) {
     return str.replace(/&/g, '&amp;')
               .replace(/</g, '&lt;')

@@ -14,184 +14,285 @@
 
   <header class="app-header">
     <div class="header-container">
-      <div class="brand">
-        <span class="logo-icon">▲</span>
-        <h1>Forza Geometrize <span class="badge-gpu">GPU GPU</span></h1>
+      <div class="header-top">
+        <div class="brand">
+          <span class="logo-icon">▲</span>
+          <h1>Forza Geometrize <span class="badge-gpu">GPU GPU</span></h1>
+        </div>
+        <p class="subtitle">基於 OpenCL 與 Go 重構的高效幾何圖元擬合生成器</p>
       </div>
-      <p class="subtitle">基於 OpenCL 與 Go 重構的高效幾何圖元擬合生成器</p>
+      <nav class="app-tabs" role="tablist">
+        <button class="btn-tab active" data-tab="generator" aria-selected="true" role="tab" id="tabBtnGenerator">幾何擬合生成</button>
+        <button class="btn-tab" data-tab="injector" aria-selected="false" role="tab" id="tabBtnInjector">記憶體匯入遊戲</button>
+      </nav>
     </div>
   </header>
 
   <main class="app-container">
-    <div class="grid-layout">
-      
-      <!-- 左側：設定與上傳 -->
-      <section class="control-panel panel">
-        <h2 class="section-title">輸入與參數配置</h2>
+    
+    <!-- 幾何擬合生成面板 -->
+    <div id="tab-generator" class="tab-pane active">
+      <div class="grid-layout">
         
-        <!-- 拖曳上傳區 -->
-        <div class="upload-zone" id="dropZone" tabindex="0" role="button" aria-label="上傳圖片，點擊或將圖片拖曳至此處">
-          <input type="file" id="fileInput" accept="image/*" class="sr-only">
-          <div class="upload-prompt">
-            <svg class="upload-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-            </svg>
-            <p class="upload-text">拖曳圖片到這裡，或 <span class="highlight">瀏覽電腦</span></p>
-            <p class="upload-hint">支援 PNG, JPG, JPEG 格式，會自動放入 img_pre</p>
-          </div>
-          <div class="upload-preview-container hidden" id="uploadPreviewContainer">
-            <img src="" alt="上傳圖片預覽" id="uploadPreview" class="upload-preview-img">
-            <button class="btn-remove-file" id="btnRemoveFile" aria-label="清除檔案">✕</button>
-            <p class="filename-text" id="filenameText"></p>
-          </div>
-        </div>
-
-        <!-- 參數設定 -->
-        <div class="settings-form">
-          <h3 class="form-sub-title">生成品質配置</h3>
+        <!-- 左側：設定與上傳 -->
+        <section class="control-panel panel">
+          <h2 class="section-title">輸入與參數配置</h2>
           
-          <div class="quality-selector">
-            <button class="btn-quality active" data-quality="low" aria-pressed="true" data-tooltip="【低品質設定】&#10;• 最大圖層數: 1200&#10;• 隨機樣本數: 8000 (OpenCL)&#10;• 變異樣本數: 800&#10;• 解析度限制: 1200&#10;極速擬合，適合簡單圖形或快速測試。">
-              <span class="q-title">低品質</span>
-              <span class="q-desc">1200 圖層 | 快速擬合</span>
-            </button>
-            <button class="btn-quality" data-quality="medium" aria-pressed="false" data-tooltip="【中等品質設定】 (預設)&#10;• 最大圖層數: 1200&#10;• 隨機樣本數: 25000 (OpenCL)&#10;• 變異樣本數: 1500&#10;• 解析度限制: 1200&#10;均衡表現，兼顧速度與畫質。">
-              <span class="q-title">中等</span>
-              <span class="q-desc">1200 圖層 | 均衡表現</span>
-            </button>
-            <button class="btn-quality" data-quality="high" aria-pressed="false" data-tooltip="【高品質設定】&#10;• 最大圖層數: 1200&#10;• 隨機樣本數: 60000 (OpenCL)&#10;• 變異樣本數: 3000&#10;• 解析度限制: 1200&#10;極致細節，適合高複雜度或文字還原。">
-              <span class="q-title">高品質</span>
-              <span class="q-desc">1200 圖層 | 極致細節</span>
-            </button>
-            <button class="btn-quality" data-quality="custom" aria-pressed="false" id="btnCustomQuality" data-tooltip="【自定義設定】&#10;點擊展開，手動配置圖層數、解析度、隨機與變異樣本數。">
-              <span class="q-title">自定義</span>
-              <span class="q-desc">手動配置參數</span>
-            </button>
-          </div>
-
-          <!-- 自定義參數區，預設隱藏 -->
-          <div class="custom-settings-panel collapsed" id="customSettingsPanel">
-            <div class="input-grid">
-              <div class="input-group">
-                <label for="stopAt">
-                  最大圖層數 (stopAt)
-                  <span class="tooltip-trigger" data-tooltip="擬合在達到此圖層數時停止。對於極限競速，單一區域貼紙上限為 3000 張。&#10;建議值：1000 ~ 3000">!</span>
-                </label>
-                <input type="number" id="stopAt" value="1000" min="100" max="10000" step="100">
-                <span class="input-helper">擬合在達到此圖層數時停止</span>
-              </div>
-              <div class="input-group">
-                <label for="maxResolution">
-                  最大解析度 (maxResolution)
-                  <span class="tooltip-trigger" data-tooltip="輸入圖片擬合時的最大邊長。數值越大對比越精細，但速度會以平方倍數變慢。&#10;建議值：1200 ~ 2000">!</span>
-                </label>
-                <input type="number" id="maxResolution" value="1200" min="200" max="2400" step="100">
-                <span class="input-helper">輸入圖片擬合的最大解析度</span>
-              </div>
-              <div class="input-group">
-                <label for="mutatedSamples">
-                  變異樣本數 (mutatedSamples)
-                  <span class="tooltip-trigger" data-tooltip="每次演化微調幾何形狀的嘗試次數。次數越多邊緣收得越漂亮，但耗時較長。&#10;建議值：1000 ~ 3000">!</span>
-                </label>
-                <input type="number" id="mutatedSamples" value="2000" min="500" max="10000" step="500">
-                <span class="input-helper">每次演化的微調樣本數</span>
-              </div>
-              <div class="input-group">
-                <label for="randomSamples">
-                  隨機樣本數 (randomSamples)
-                  <span class="tooltip-trigger" data-tooltip="每次放貼紙前隨機產生並比對的幾何圖元數。有 GPU 加速，可開高提升質量。&#10;建議值：30000 ~ 50000">!</span>
-                </label>
-                <input type="number" id="randomSamples" value="30000" min="5000" max="100000" step="5000">
-                <span class="input-helper">OpenCL 初步篩選的隨機圖元數</span>
-              </div>
-            </div>
-          </div>
-
-          <button class="btn-primary" id="btnStart" disabled>開始擬合生成</button>
-        </div>
-      </section>
-
-      <!-- 右側：即時預覽與狀態 -->
-      <section class="preview-panel panel">
-        <div class="preview-header">
-          <h2 class="section-title">生成即時預覽</h2>
-          <div class="status-indicator-group">
-            <span class="status-dot idle" id="statusDot"></span>
-            <span class="status-text" id="statusText">等待開始</span>
-          </div>
-        </div>
-
-        <!-- 擬合影像顯示區 -->
-        <div class="preview-viewport">
-          <div class="viewport-content" id="viewportContent">
-            <!-- 骨架屏載入 / 提示資訊 -->
-            <div class="placeholder-prompt" id="placeholderPrompt">
-              <svg class="placeholder-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" />
+          <!-- 拖曳上傳區 -->
+          <div class="upload-zone" id="dropZone" tabindex="0" role="button" aria-label="上傳圖片，點擊或將圖片拖曳至此處">
+            <input type="file" id="fileInput" accept="image/*" class="sr-only">
+            <div class="upload-prompt">
+              <svg class="upload-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
               </svg>
-              <p>擬合生成開始後，此處將以 20 步為頻率即時渲染生成進度預覽</p>
+              <p class="upload-text">拖曳圖片到這裡，或 <span class="highlight">瀏覽電腦</span></p>
+              <p class="upload-hint">支援 PNG, JPG, JPEG 格式，會自動放入 img_pre</p>
             </div>
-            <img src="" alt="即時預覽影像" id="previewImg" class="preview-img hidden">
-            <!-- 運行中的 Skeleton 指示器 -->
-            <div class="loader-overlay hidden" id="loaderOverlay">
-              <div class="spinner"></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 進度與詳細資訊 -->
-        <div class="progress-details">
-          <div class="progress-bar-container">
-            <div class="progress-bar-label">
-              <span>擬合進度</span>
-              <span id="progressPercent">0%</span>
-            </div>
-            <div class="progress-track">
-              <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+            <div class="upload-preview-container hidden" id="uploadPreviewContainer">
+              <img src="" alt="上傳圖片預覽" id="uploadPreview" class="upload-preview-img">
+              <button class="btn-remove-file" id="btnRemoveFile" aria-label="清除檔案">✕</button>
+              <p class="filename-text" id="filenameText"></p>
             </div>
           </div>
 
-          <!-- 效能數據卡片 -->
-          <div class="stats-grid">
-            <div class="stat-card">
-              <span class="stat-label">當前圖層 / 總圖層</span>
-              <span class="stat-value" id="statLayers">0 / 0</span>
+          <!-- 參數設定 -->
+          <div class="settings-form">
+            <h3 class="form-sub-title">生成品質配置</h3>
+            
+            <div class="quality-selector">
+              <button class="btn-quality active" data-quality="low" aria-pressed="true" data-tooltip="【低品質設定】&#10;• 最大圖層數: 1200&#10;• 隨機樣本數: 8000 (OpenCL)&#10;• 變異樣本數: 800&#10;• 解析度限制: 1200&#10;極速擬合，適合簡單圖形或快速測試。">
+                <span class="q-title">低品質</span>
+                <span class="q-desc">1200 圖層 | 快速擬合</span>
+              </button>
+              <button class="btn-quality" data-quality="medium" aria-pressed="false" data-tooltip="【中等品質設定】 (預設)&#10;• 最大圖層數: 1200&#10;• 隨機樣本數: 25000 (OpenCL)&#10;• 變異樣本數: 1500&#10;• 解析度限制: 1200&#10;均衡表現，兼顧速度與畫質。">
+                <span class="q-title">中等</span>
+                <span class="q-desc">1200 圖層 | 均衡表現</span>
+              </button>
+              <button class="btn-quality" data-quality="high" aria-pressed="false" data-tooltip="【高品質設定】&#10;• 最大圖層數: 1200&#10;• 隨機樣本數: 60000 (OpenCL)&#10;• 變異樣本數: 3000&#10;• 解析度限制: 1200&#10;極致細節，適合高複雜度或文字還原。">
+                <span class="q-title">高品質</span>
+                <span class="q-desc">1200 圖層 | 極致細節</span>
+              </button>
+              <button class="btn-quality" data-quality="custom" aria-pressed="false" id="btnCustomQuality" data-tooltip="【自定義設定】&#10;點擊展開，手動配置圖層數、解析度、隨機與變異樣本數。">
+                <span class="q-title">自定義</span>
+                <span class="q-desc">手動配置參數</span>
+              </button>
             </div>
-            <div class="stat-card">
-              <span class="stat-label">已運行時間</span>
-              <span class="stat-value" id="statElapsedTime">00:00:00</span>
+
+            <!-- 自定義參數區，預設隱藏 -->
+            <div class="custom-settings-panel collapsed" id="customSettingsPanel">
+              <div class="input-grid">
+                <div class="input-group">
+                  <label for="stopAt">
+                    最大圖層數 (stopAt)
+                    <span class="tooltip-trigger" data-tooltip="擬合在達到此圖層數時停止。對於極限競速，單一區域貼紙上限為 3000 張。&#10;建議值：1000 ~ 3000">!</span>
+                  </label>
+                  <input type="number" id="stopAt" value="1000" min="100" max="10000" step="100">
+                  <span class="input-helper">擬合在達到此圖層數時停止</span>
+                </div>
+                <div class="input-group">
+                  <label for="maxResolution">
+                    最大解析度 (maxResolution)
+                    <span class="tooltip-trigger" data-tooltip="輸入圖片擬合時的最大邊長。數值越大對比越精細，但速度會以平方倍數變慢。&#10;建議值：1200 ~ 2000">!</span>
+                  </label>
+                  <input type="number" id="maxResolution" value="1200" min="200" max="2400" step="100">
+                  <span class="input-helper">輸入圖片擬合的最大解析度</span>
+                </div>
+                <div class="input-group">
+                  <label for="mutatedSamples">
+                    變異樣本數 (mutatedSamples)
+                    <span class="tooltip-trigger" data-tooltip="每次演化微調幾何形狀的嘗試次數。次數越多邊緣收得越漂亮，但耗時較長。&#10;建議值：1000 ~ 3000">!</span>
+                  </label>
+                  <input type="number" id="mutatedSamples" value="2000" min="500" max="10000" step="500">
+                  <span class="input-helper">每次演化的微調樣本數</span>
+                </div>
+                <div class="input-group">
+                  <label for="randomSamples">
+                    隨機樣本數 (randomSamples)
+                    <span class="tooltip-trigger" data-tooltip="每次放貼紙前隨機產生並比對的幾何圖元數。有 GPU 加速，可開高提升質量。&#10;建議值：30000 ~ 50000">!</span>
+                  </label>
+                  <input type="number" id="randomSamples" value="30000" min="5000" max="100000" step="5000">
+                  <span class="input-helper">OpenCL 初步篩選的隨機圖元數</span>
+                </div>
+              </div>
             </div>
-            <div class="stat-card">
-              <span class="stat-label">預估剩餘時間</span>
-              <span class="stat-value" id="statRemainingTime">00:00:00</span>
-            </div>
-            <div class="stat-card">
-              <span class="stat-label">單步耗時 (OpenCL)</span>
-              <span class="stat-value" id="statStepTime">0 ms</span>
+
+            <button class="btn-primary" id="btnStart" disabled>開始擬合生成</button>
+          </div>
+        </section>
+
+        <!-- 右側：即時預覽與狀態 -->
+        <section class="preview-panel panel">
+          <div class="preview-header">
+            <h2 class="section-title">生成即時預覽</h2>
+            <div class="status-indicator-group">
+              <span class="status-dot idle" id="statusDot"></span>
+              <span class="status-text" id="statusText">等待開始</span>
             </div>
           </div>
 
-          <!-- 控制與終止 -->
-          <div class="control-actions">
-            <button class="btn-danger" id="btnStop" disabled>
-              <svg class="icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
-              </svg>
-              終止運行
-            </button>
-          </div>
-
-          <!-- 即時日誌 -->
-          <div class="console-log-container">
-            <span class="stat-label">引擎運行日誌</span>
-            <div class="console-log-box" id="consoleLogBox">
-              <div class="log-line text-dim">等待任務啟動以輸出日誌...</div>
+          <!-- 擬合影像顯示區 -->
+          <div class="preview-viewport">
+            <div class="viewport-content" id="viewportContent">
+              <!-- 骨架屏載入 / 提示資訊 -->
+              <div class="placeholder-prompt" id="placeholderPrompt">
+                <svg class="placeholder-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" />
+                </svg>
+                <p>擬合生成開始後，此處將以 20 步為頻率即時渲染生成進度預覽</p>
+              </div>
+              <img src="" alt="即時預覽影像" id="previewImg" class="preview-img hidden">
+              <!-- 運行中的 Skeleton 指示器 -->
+              <div class="loader-overlay hidden" id="loaderOverlay">
+                <div class="spinner"></div>
+              </div>
             </div>
           </div>
-        </div>
-      </section>
 
+          <!-- 進度與詳細資訊 -->
+          <div class="progress-details">
+            <div class="progress-bar-container">
+              <div class="progress-bar-label">
+                <span>擬合進度</span>
+                <span id="progressPercent">0%</span>
+              </div>
+              <div class="progress-track">
+                <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+              </div>
+            </div>
+
+            <!-- 效能數據卡片 -->
+            <div class="stats-grid">
+              <div class="stat-card">
+                <span class="stat-label">當前圖層 / 總圖層</span>
+                <span class="stat-value" id="statLayers">0 / 0</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">已運行時間</span>
+                <span class="stat-value" id="statElapsedTime">00:00:00</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">預估剩餘時間</span>
+                <span class="stat-value" id="statRemainingTime">00:00:00</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">單步耗時 (OpenCL)</span>
+                <span class="stat-value" id="statStepTime">0 ms</span>
+              </div>
+            </div>
+
+            <!-- 控制與終止 -->
+            <div class="control-actions">
+              <button class="btn-danger" id="btnStop" disabled>
+                <svg class="icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+                </svg>
+                終止運行
+              </button>
+            </div>
+
+            <!-- 即時日誌 -->
+            <div class="console-log-container">
+              <span class="stat-label">引擎運行日誌</span>
+              <div class="console-log-box" id="consoleLogBox">
+                <div class="log-line text-dim">等待任務啟動以輸出日誌...</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+      </div>
     </div>
+
+    <!-- 記憶體匯入遊戲面板 -->
+    <div id="tab-injector" class="tab-pane hidden">
+      <div class="grid-layout">
+        
+        <!-- 左側：控制與檔案選擇 -->
+        <section class="injector-control panel">
+          <h2 class="section-title">選擇與配置 JSON 車貼數據</h2>
+          
+          <div class="import-mode-selector">
+            <button class="btn-mode active" id="btnModeSelect" data-mode="select">選擇歷史生成 JSON</button>
+            <button class="btn-mode" id="btnModeUpload" data-mode="upload">上傳外部 JSON</button>
+          </div>
+
+          <!-- 模式一：選擇歷史生成 -->
+          <div class="mode-section" id="modeSelectSection">
+            <div class="input-group">
+              <label for="jsonSelect">選擇產出的 JSON 檔案</label>
+              <div class="select-wrapper">
+                <select id="jsonSelect">
+                  <option value="">載入中...</option>
+                </select>
+              </div>
+              <span class="input-helper">從本機 `img_json/` 目錄中選擇已完成的幾何擬合檔案</span>
+            </div>
+          </div>
+
+          <!-- 模式二：上傳外部 JSON -->
+          <div class="mode-section hidden" id="modeUploadSection">
+            <div class="upload-zone" id="jsonDropZone" tabindex="0" role="button" aria-label="上傳 JSON 貼紙檔案，點擊或拖曳至此處">
+              <input type="file" id="jsonFileInput" accept=".json" class="sr-only">
+              <div class="upload-prompt">
+                <svg class="upload-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <p class="upload-text">拖曳 JSON 檔案到這裡，或 <span class="highlight">瀏覽電腦</span></p>
+                <p class="upload-hint">必須是標準的 Geometrize 輸出 JSON 格式</p>
+              </div>
+              <div class="upload-preview-container hidden" id="jsonUploadPreviewContainer">
+                <div class="json-file-icon">📄</div>
+                <button class="btn-remove-file" id="btnRemoveJsonFile" aria-label="清除檔案">✕</button>
+                <p class="filename-text" id="jsonFilenameText"></p>
+              </div>
+            </div>
+          </div>
+
+          <!-- 說明 -->
+          <div class="injector-actions">
+            <div class="info-notice">
+              <span class="notice-title">💡 匯入操作指南：</span>
+              <ol class="notice-list">
+                <li>開啟並進入《極限競速：地平線 6》遊戲。</li>
+                <li>進入「車庫」➔「設計與塗裝」➔「應用貼紙與形狀」。</li>
+                <li><strong>建立一個包含足夠貼紙數量的群組</strong>（例如您要匯入 1200 層，請確保在編輯器中先隨機放置一個具有 1200 個形狀的群組，並處於編輯狀態）。</li>
+                <li>點擊下方「開始寫入遊戲記憶體」按鈕，請勿關閉遊戲或網頁。</li>
+              </ol>
+            </div>
+
+            <button class="btn-primary" id="btnInject" disabled>開始寫入遊戲記憶體 (Inject)</button>
+          </div>
+        </section>
+
+        <!-- 右側：日誌主控台 -->
+        <section class="injector-log panel">
+          <h2 class="section-title">注入執行狀態</h2>
+          
+          <div class="terminal-container">
+            <div class="terminal-header">
+              <span class="terminal-dot red"></span>
+              <span class="terminal-dot yellow"></span>
+              <span class="terminal-dot green"></span>
+              <span class="terminal-title">Log Console</span>
+            </div>
+            <div class="terminal-body" id="injectorLogConsole">
+              <div class="log-line text-dim">等待選擇檔案並啟動注入...</div>
+            </div>
+          </div>
+          
+          <div class="control-actions" style="margin-top: 20px;">
+            <button class="btn-danger" id="btnStopInject" disabled>
+              <svg class="icon" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+              中止寫入
+            </button>
+          </div>
+        </section>
+
+      </div>
+    </div>
+
   </main>
 
   <!-- 全局 Toast 提示容器 -->
