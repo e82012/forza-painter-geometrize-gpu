@@ -187,7 +187,7 @@ func Run(opts Options) error {
 		randomCands := randomCandidates(rng, prepared, cfg.RandomSamples, cfg.ForceOpaqueShapes, sampler, progress)
 
 		fmt.Printf("[%d/%d] Evaluating random sample batch on GPU (%d)...\n", step, cfg.StopAt, len(randomCands))
-		best, bestScore, err := submitAndPickBest(evaluator, randomCands)
+		best, bestScore, err := submitAndPickBest(evaluator, randomCands, acceptedShapes)
 		if err != nil {
 			return err
 		}
@@ -197,7 +197,7 @@ func Run(opts Options) error {
 			improved := 0
 			for round := 0; round < hillClimbRounds; round++ {
 				mutations := mutatedCandidates(rng, prepared, best, mutationsPerRound, cfg.ForceOpaqueShapes, moveStep, radiusStep)
-				roundBest, roundScore, mutErr := submitAndPickBest(evaluator, mutations)
+				roundBest, roundScore, mutErr := submitAndPickBest(evaluator, mutations, acceptedShapes)
 				if mutErr != nil {
 					return mutErr
 				}
@@ -226,11 +226,10 @@ func Run(opts Options) error {
 
 		consecutiveNoImprove = 0
 
-		// Snap the accepted geometry onto the game's visible precision grid,
-		// then re-evaluate that exact candidate so the applied canvas and
-		// score bookkeeping match what the game will actually see.
+		// Re-evaluate the final integer-quantized candidate so the applied
+		// canvas and score bookkeeping match the exported geometry.
 		final := quantizeCandidate(best, prepared.Width, prepared.Height, cfg.ForceOpaqueShapes)
-		final, finalScore, err := submitAndPickBest(evaluator, []model.Candidate{final})
+		final, finalScore, err := submitAndPickBest(evaluator, []model.Candidate{final}, acceptedShapes)
 		if err != nil {
 			return err
 		}
@@ -559,24 +558,24 @@ func randomCandidates(rng *rand.Rand, prepared *imageutil.PreparedImage, count i
 		if !forceOpaque {
 			alpha = randRange(rng, 0.3, 1.0)
 		}
-		out = append(out, quantizeCandidate(model.Candidate{
+		out = append(out, model.Candidate{
 			X:     x,
 			Y:     y,
 			RX:    randRange(rng, minRadius, maxRadius),
 			RY:    randRange(rng, minRadius, maxRadius),
 			Theta: rng.Float32() * 360,
 			A:     alpha,
-		}, prepared.Width, prepared.Height, forceOpaque))
+		})
 	}
 	if len(out) == 0 {
-		out = append(out, quantizeCandidate(model.Candidate{
+		out = append(out, model.Candidate{
 			X:     w * 0.5,
 			Y:     h * 0.5,
 			RX:    maxRadius * 0.25,
 			RY:    maxRadius * 0.25,
 			Theta: 0,
 			A:     1.0,
-		}, prepared.Width, prepared.Height, forceOpaque))
+		})
 	}
 	return out
 }
@@ -616,10 +615,10 @@ func mutatedCandidates(rng *rand.Rand, prepared *imageutil.PreparedImage, base m
 		if forceOpaque {
 			cand.A = 1.0
 		}
-		out = append(out, quantizeCandidate(cand, prepared.Width, prepared.Height, forceOpaque))
+		out = append(out, cand)
 	}
 	if len(out) == 0 {
-		out = append(out, quantizeCandidate(base, prepared.Width, prepared.Height, forceOpaque))
+		out = append(out, base)
 	}
 	return out
 }
@@ -628,7 +627,7 @@ func mutatedCandidates(rng *rand.Rand, prepared *imageutil.PreparedImage, base m
 // returns the lowest-score candidate with its GPU-computed optimal color
 // merged in. This is the tight inner loop of both random sampling and
 // hill climb.
-func submitAndPickBest(e gpu.Backend, cands []model.Candidate) (model.Candidate, float32, error) {
+func submitAndPickBest(e gpu.Backend, cands []model.Candidate, acceptedShapes int) (model.Candidate, float32, error) {
 	t, err := e.SubmitEval(cands)
 	if err != nil {
 		return model.Candidate{}, 0, err
@@ -641,10 +640,11 @@ func submitAndPickBest(e gpu.Backend, cands []model.Candidate) (model.Candidate,
 		return model.Candidate{}, 0, fmt.Errorf("no candidate scores returned")
 	}
 	bestIdx := 0
-	bestScore := results[0].Score
+	bestAdjusted := results[0].Score + scaleCompatibilityPenalty(cands[0], acceptedShapes)
 	for i := 1; i < len(results); i++ {
-		if results[i].Score < bestScore {
-			bestScore = results[i].Score
+		adjusted := results[i].Score + scaleCompatibilityPenalty(cands[i], acceptedShapes)
+		if adjusted < bestAdjusted {
+			bestAdjusted = adjusted
 			bestIdx = i
 		}
 	}
@@ -652,7 +652,37 @@ func submitAndPickBest(e gpu.Backend, cands []model.Candidate) (model.Candidate,
 	best.R = results[bestIdx].R
 	best.G = results[bestIdx].G
 	best.B = results[bestIdx].B
-	return best, bestScore, nil
+	return best, results[bestIdx].Score, nil
+}
+
+func scaleCompatibilityPenalty(c model.Candidate, acceptedShapes int) float32 {
+	if c.RX < 0 || c.RY < 0 {
+		return 0
+	}
+	const divisor = 63.0
+	rx := float64(maxInt(1, int(math.Round(float64(c.RX)))))
+	ry := float64(maxInt(1, int(math.Round(float64(c.RY)))))
+	scaleX := rx / divisor
+	scaleY := ry / divisor
+	tailX := scaleX - math.Trunc(scaleX*100.0)/100.0
+	tailY := scaleY - math.Trunc(scaleY*100.0)/100.0
+	span := math.Max(rx, ry)
+	tail := tailX + tailY
+
+	// Force the first few large ellipses to land on a scale that survives
+	// the game's two-decimal truncation with minimal loss.
+	if acceptedShapes < 8 && span >= 96 {
+		if tail > 0.003 {
+			return 1e9
+		}
+		return float32((tail * span * 50.0) + (span * span * 0.1))
+	}
+
+	// Smaller / later ellipses get a softer bias toward clean 63-based scales.
+	if span >= 96 {
+		return float32((tail * span * 8.0) + (span * 0.05))
+	}
+	return float32(tail * span * 2.0)
 }
 
 func isRejectedEvalScore(score float32) bool {
@@ -775,54 +805,31 @@ func normalizeScore(totalError, denom float64) float64 {
 	return math.Round(value*1_000_000) / 1_000_000
 }
 
-// quantizeCandidate snaps geometry onto the game's visible precision grid
-// so the search evaluates the same values the game will actually consume.
-// The JSON export remains integer-based for downstream tooling.
+// quantizeCandidate rounds geometry to the integer grid used by the
+// downstream importer and keeps colours in 8-bit space.
 func quantizeCandidate(c model.Candidate, width, height int, forceOpaque bool) model.Candidate {
-	c.X = snap2(clampFloat(c.X, 0, float32(maxInt(0, width-1))))
-	c.Y = snap2(clampFloat(c.Y, 0, float32(maxInt(0, height-1))))
-	c.RX = snap2(maxFloat(0.01, c.RX))
-	c.RY = snap2(maxFloat(0.01, c.RY))
-	c.Theta = snap2(normalizeAngle(c.Theta))
+	c.X = float32(clampInt(int(math.Round(float64(c.X))), 0, maxInt(0, width-1)))
+	c.Y = float32(clampInt(int(math.Round(float64(c.Y))), 0, maxInt(0, height-1)))
+	c.RX = float32(maxInt(1, int(math.Round(float64(c.RX)))))
+	c.RY = float32(maxInt(1, int(math.Round(float64(c.RY)))))
+
+	angle := int(math.Round(float64(c.Theta))) % 360
+	if angle < 0 {
+		angle += 360
+	}
+	if angle == 0 && c.Theta > 359.5 {
+		angle = 360
+	}
+	c.Theta = float32(angle)
 
 	if forceOpaque {
 		c.A = 1.0
-	} else {
-		c.A = snap2(clampFloat(c.A, 0, 1))
 	}
-	c.R = snap2(clampFloat(c.R, 0, 1))
-	c.G = snap2(clampFloat(c.G, 0, 1))
-	c.B = snap2(clampFloat(c.B, 0, 1))
+	c.R = float32(f32ToByte(c.R)) / 255.0
+	c.G = float32(f32ToByte(c.G)) / 255.0
+	c.B = float32(f32ToByte(c.B)) / 255.0
+	c.A = float32(f32ToByte(c.A)) / 255.0
 	return c
-}
-
-func snap2(v float32) float32 {
-	return float32(math.Trunc(float64(v*100)) / 100)
-}
-
-func normalizeAngle(v float32) float32 {
-	v = float32(math.Mod(float64(v), 360))
-	if v < 0 {
-		v += 360
-	}
-	return v
-}
-
-func clampFloat(v, minV, maxV float32) float32 {
-	if v < minV {
-		return minV
-	}
-	if v > maxV {
-		return maxV
-	}
-	return v
-}
-
-func maxFloat(a, b float32) float32 {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func clampInt(v, minV, maxV int) int {
