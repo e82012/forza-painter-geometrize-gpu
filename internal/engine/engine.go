@@ -150,7 +150,6 @@ func runSinglePass(opts Options, cfg model.Settings, prepared *imageutil.Prepare
 	fmt.Println("Pipeline: async (in-order queue, ring=3; sampler 1-shape stale)")
 	fmt.Println("Scoring mode: DeltaE with GPU-computed optimal color (negative = better)")
 
-	acceptedShapes := 0
 	consecutiveNoImprove := 0
 	finalPruneAttempts := 0
 	lastPrunedMilestone := 0
