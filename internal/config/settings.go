@@ -18,7 +18,7 @@ func DefaultSettings() model.Settings {
 		MaxResolution:                 2000,
 		MaxThreads:                    0,
 		MutatedSamples:                1000,
-		ForceOpaqueShapes:             true,
+		ForceOpaqueShapes:             false,
 		PosterizeLevels:               20,
 		PreviewEvery:                  10,
 		RandomSamples:                 3000,
@@ -132,6 +132,8 @@ func ParseSettings(path string) (model.Settings, error) {
 			cfg.MultiScale = parseBool(value, cfg.MultiScale)
 		case "savePassPreviews":
 			cfg.SavePassPreviews = parseBool(value, cfg.SavePassPreviews)
+		case "loadGeometry":
+			cfg.LoadGeometry = value
 		}
 	}
 	if err := scanner.Err(); err != nil {

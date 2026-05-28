@@ -11,7 +11,7 @@ This is a third-party Geometrize shape (JSON) generation tool based on [forza-pa
 
 ## 🚀 Optimizations & Enhancements in `feature/edge-guided-sampling`
 
-The `feature/edge-guided-sampling` branch introduces the following adjustments and optimizations:
+The `feature/edge-guided-sampling-v3` branch builds on all v2 features and further integrates game-compatibility fixes from the `main` branch:
 
 ### 1. CMA-ES Optimization Algorithm (Covariance Matrix Adaptation Evolution Strategy)
 * **Description**: Uses CMA-ES to search the 5D parameter space (center $X, Y$, semi-axes $RX, RY$, and rotation angle $\theta$) for ellipses.
@@ -33,6 +33,12 @@ The `feature/edge-guided-sampling` branch introduces the following adjustments a
 
 ### 6. Forza Livery Memory Injector
 * **Description**: Adds a dedicated "Memory Injector" tab page. It supports selecting from local historically generated JSON files or uploading custom external JSON shape files. The Node.js backend safely triggers the Windows memory writing engine to hot-inject geometry data directly into the active Forza livery editor table in VRAM, eliminating manual drawing and rendering shapes instantly.
+
+### 7. Scale Compatibility Penalty
+* **Description**: When Forza imports geometry JSON, it truncates the ellipse scale factor (radius/63) to two decimal places. This mechanism adds a penalty during candidate shape selection to favor ellipse sizes whose scale values survive that truncation with minimal loss. The first 8 large ellipses receive strict penalties; subsequent shapes receive soft biasing.
+
+### 8. Checkpoint Resume
+* **Description**: Supports resuming from a previously saved geometry JSON checkpoint, continuing the shape fitting from where it left off. The resume path can be specified via the `--resume` CLI flag or the `loadGeometry` setting in the `.ini` configuration file.
 
 ---
 
@@ -57,7 +63,7 @@ The `feature/edge-guided-sampling` branch introduces the following adjustments a
 ### Command Line Arguments
 
 ```bash
-Usage: forza-painter-geometrize-go.exe [--settings path.ini|--profile name] [--output path] [--preview path] [--seed n] [--edge-weight w] [--multiscale] [--save-pass-previews] <image-path>
+Usage: forza-painter-geometrize-go.exe [--settings path.ini|--profile name] [--output path] [--preview path] [--seed n] [--edge-weight w] [--multiscale] [--save-pass-previews] [--resume checkpoint.json] <image-path>
 ```
 
 | Argument | Description | Default |
@@ -70,12 +76,17 @@ Usage: forza-painter-geometrize-go.exe [--settings path.ini|--profile name] [--o
 | `--edge-weight` | Edge-guided sampling weight (`0` to disable, recommended: `2.0` ~ `5.0`) | `-1.0` (disabled) |
 | `--multiscale` | Enable multi-scale hierarchical fitting (coarse-to-fine) | `false` |
 | `--save-pass-previews` | Save a preview image at the end of each hierarchical pass | `false` |
+| `--resume` | Resume fitting from a saved geometry JSON checkpoint | None |
 
 ### CLI Example
 
 * **Run with OpenCL acceleration, edge-guided sampling, and multi-scale fitting**:
   ```cmd
   forza-painter-geometrize-go.exe C:\work\forza\test.png --settings "C:\work\forza\settings\c.ini" --preview "C:\work\forza\preview.png" --edge-weight 3.0 --multiscale
+  ```
+* **Resume from a 1500-shape checkpoint and continue to 3000 shapes**:
+  ```cmd
+  forza-painter-geometrize-go.exe C:\work\forza\test.png --settings "C:\work\forza\settings\c.ini" --resume "C:\work\forza\test_1500.json" --preview "C:\work\forza\preview.png"
   ```
 
 ---
@@ -85,7 +96,7 @@ Usage: forza-painter-geometrize-go.exe [--settings path.ini|--profile name] [--o
 This branch provides a browser-based dashboard to easily operate the engine and monitor logs and canvas progress.
 
 ### Getting Started
-1. Ensure the compiled Go executable is named `forza-painter-geometrize-go-v1.0.exe` and placed in the project root directory (otherwise, edit the `execPath` configuration in `server.js`).
+1. Ensure the compiled Go executable is named `forza-painter-geometrize-go.exe` and placed in the project root directory (otherwise, edit the `execPath` configuration in `server.js`).
 2. Run the Node.js server by double-clicking `start_server.bat` or executing:
    ```bash
    node server.js

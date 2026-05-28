@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	fmt.Println("Version: v1.1-20260522")
+	fmt.Println("Version: v1.2-edge-v3-20260528")
 	settingsPath := flag.String("settings", "", "Path to settings ini file")
 	profile := flag.String("profile", "", "Profile name fragment under ./settings")
 	outputPath := flag.String("output", "", "Output path prefix (default: input image path)")
@@ -20,11 +20,12 @@ func main() {
 	edgeWeight := flag.Float64("edge-weight", -1.0, "Edge-guided sampling weight (0=disabled, recommended: 2.0~5.0)")
 	multiScale := flag.Bool("multiscale", false, "Enable multi-scale hierarchical fitting")
 	savePassPreviews := flag.Bool("save-pass-previews", false, "Save preview image after each pass")
+	resumePath := flag.String("resume", "", "Resume from a saved geometry checkpoint JSON")
 	flag.Parse()
-	applyTrailingOptions(flag.Args()[1:], settingsPath, profile, outputPath, previewPath, seed, edgeWeight, multiScale, savePassPreviews)
+	applyTrailingOptions(flag.Args()[1:], settingsPath, profile, outputPath, previewPath, seed, edgeWeight, multiScale, savePassPreviews, resumePath)
 
 	if flag.NArg() < 1 {
-		fmt.Println("Usage: forza-painter-geometrize [--settings path.ini|--profile name] [--output path] [--preview path] [--seed n] <image-path>")
+		fmt.Println("Usage: forza-painter-geometrize-go.exe [--settings path.ini|--profile name] [--output path] [--preview path] [--seed n] [--edge-weight w] [--multiscale] [--save-pass-previews] [--resume checkpoint.json] <image-path>")
 		os.Exit(1)
 	}
 
@@ -42,6 +43,7 @@ func main() {
 		EdgeWeight:       *edgeWeight,
 		MultiScale:       *multiScale,
 		SavePassPreviews: *savePassPreviews,
+		ResumePath:       *resumePath,
 	}
 
 	if err := engine.Run(opts); err != nil {
@@ -80,7 +82,7 @@ func normalizePreviewPath(path string) string {
 	return abs
 }
 
-func applyTrailingOptions(extra []string, settingsPath, profile, outputPath, previewPath *string, seed *int64, edgeWeight *float64, multiScale, savePassPreviews *bool) {
+func applyTrailingOptions(extra []string, settingsPath, profile, outputPath, previewPath *string, seed *int64, edgeWeight *float64, multiScale, savePassPreviews *bool, resumePath *string) {
 	for i := 0; i < len(extra); i++ {
 		arg := extra[i]
 		next := func() (string, bool) {
@@ -126,6 +128,10 @@ func applyTrailingOptions(extra []string, settingsPath, profile, outputPath, pre
 			*multiScale = true
 		case "--save-pass-previews", "-save-pass-previews":
 			*savePassPreviews = true
+		case "--resume", "-resume":
+			if v, ok := next(); ok {
+				*resumePath = v
+			}
 		}
 	}
 }

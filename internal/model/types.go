@@ -22,6 +22,7 @@ type Settings struct {
 	EdgeWeight                    float64
 	MultiScale                    bool
 	SavePassPreviews              bool
+	LoadGeometry                  string
 }
 
 type PassConfig struct {

@@ -25,6 +25,7 @@ type Options struct {
 	EdgeWeight       float64
 	MultiScale       bool
 	SavePassPreviews bool
+	ResumePath       string
 }
 
 const (
@@ -106,8 +107,30 @@ func runSinglePass(opts Options, cfg model.Settings, prepared *imageutil.Prepare
 
 	shapes := []model.Shape{backgroundShape(prepared, normalizeScore(currentError, denom))}
 
+	acceptedShapes := 0
+
 	lambda := 32
 	generations := cfg.MutatedSamples / lambda
+
+	// Resume from checkpoint if specified
+	resumePath := opts.ResumePath
+	if resumePath == "" {
+		resumePath = cfg.LoadGeometry
+	}
+	if resumePath != "" {
+		restoredShapes, restoredCount, resumeErr := restoreCheckpoint(resumePath, prepared, cfg.ForceOpaqueShapes, evaluator)
+		if resumeErr != nil {
+			return resumeErr
+		}
+		if restoredCount >= cfg.StopAt {
+			return fmt.Errorf("checkpoint already has %d shapes (target stopAt=%d)", restoredCount, cfg.StopAt)
+		}
+		shapes = restoredShapes
+		acceptedShapes = restoredCount
+		currentError, opaquePixels = computeTotalError(prepared.Target, prepared.Current, prepared.OpaqueMask)
+		denom = float64(maxInt(1, opaquePixels*4))
+		fmt.Printf("Resumed from checkpoint: %s (%d/%d shapes)\n", resumePath, acceptedShapes, cfg.StopAt)
+	}
 
 	// Initial sampler is computed synchronously - the engine has nothing
 	// useful to do until the first random batch can be sampled.
@@ -154,7 +177,7 @@ func runSinglePass(opts Options, cfg model.Settings, prepared *imageutil.Prepare
 		randomCands := randomCandidates(rng, prepared, cfg.RandomSamples, cfg.ForceOpaqueShapes, sampler, 2.0, maxRad)
 
 		fmt.Printf("[%d/%d] Evaluating random sample batch on OpenCL (%d)...\n", step, cfg.StopAt, len(randomCands))
-		best, bestScore, err := submitAndPickBest(evaluator, randomCands)
+		best, bestScore, err := submitAndPickBest(evaluator, randomCands, acceptedShapes)
 		if err != nil {
 			return err
 		}
@@ -570,11 +593,7 @@ func randomCandidates(rng *rand.Rand, prepared *imageutil.PreparedImage, count i
 
 
 
-// submitAndPickBest submits a candidate batch, waits for the result and
-// returns the lowest-score candidate with its GPU-computed optimal color
-// merged in. This is the tight inner loop of both random sampling and
-// hill climb.
-func submitAndPickBest(e *gpu.Evaluator, cands []model.Candidate) (model.Candidate, float32, error) {
+func submitAndPickBest(e *gpu.Evaluator, cands []model.Candidate, acceptedShapes int) (model.Candidate, float32, error) {
 	t, err := e.SubmitEval(cands)
 	if err != nil {
 		return model.Candidate{}, 0, err
@@ -587,10 +606,11 @@ func submitAndPickBest(e *gpu.Evaluator, cands []model.Candidate) (model.Candida
 		return model.Candidate{}, 0, fmt.Errorf("no candidate scores returned")
 	}
 	bestIdx := 0
-	bestScore := results[0].Score
+	bestAdjusted := results[0].Score + scaleCompatibilityPenalty(cands[0], acceptedShapes)
 	for i := 1; i < len(results); i++ {
-		if results[i].Score < bestScore {
-			bestScore = results[i].Score
+		adjusted := results[i].Score + scaleCompatibilityPenalty(cands[i], acceptedShapes)
+		if adjusted < bestAdjusted {
+			bestAdjusted = adjusted
 			bestIdx = i
 		}
 	}
@@ -598,7 +618,40 @@ func submitAndPickBest(e *gpu.Evaluator, cands []model.Candidate) (model.Candida
 	best.R = results[bestIdx].R
 	best.G = results[bestIdx].G
 	best.B = results[bestIdx].B
-	return best, bestScore, nil
+	return best, results[bestIdx].Score, nil
+}
+
+// scaleCompatibilityPenalty adds a soft bias toward ellipse sizes that
+// survive the game's two-decimal-place truncation of the scale factor.
+// Ellipses are scaled by dividing radius by 63 in the game engine.
+func scaleCompatibilityPenalty(c model.Candidate, acceptedShapes int) float32 {
+	if c.RX < 0 || c.RY < 0 {
+		return 0
+	}
+	const divisor = 63.0
+	rx := float64(maxInt(1, int(math.Round(float64(c.RX)))))
+	ry := float64(maxInt(1, int(math.Round(float64(c.RY)))))
+	scaleX := rx / divisor
+	scaleY := ry / divisor
+	tailX := scaleX - math.Trunc(scaleX*100.0)/100.0
+	tailY := scaleY - math.Trunc(scaleY*100.0)/100.0
+	span := math.Max(rx, ry)
+	tail := tailX + tailY
+
+	// Force the first few large ellipses to land on a scale that survives
+	// the game's two-decimal truncation with minimal loss.
+	if acceptedShapes < 8 && span >= 96 {
+		if tail > 0.003 {
+			return 1e9
+		}
+		return float32((tail * span * 50.0) + (span * span * 0.1))
+	}
+
+	// Smaller / later ellipses get a softer bias toward clean 63-based scales.
+	if span >= 96 {
+		return float32((tail * span * 8.0) + (span * 0.05))
+	}
+	return float32(tail * span * 2.0)
 }
 
 func toShape(c model.Candidate, score float64) model.Shape {

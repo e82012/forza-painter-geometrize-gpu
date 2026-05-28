@@ -192,7 +192,7 @@ func runPass(opts Options, cfg model.Settings, prepared *imageutil.PreparedImage
 
 		randomCands := randomCandidates(rng, prepared, cfg.RandomSamples, cfg.ForceOpaqueShapes, sampler, minRad, maxRad)
 
-		best, bestScore, err := submitAndPickBest(evaluator, randomCands)
+		best, bestScore, err := submitAndPickBest(evaluator, randomCands, acceptedShapes+shapeOffset)
 		if err != nil {
 			return nil, err
 		}

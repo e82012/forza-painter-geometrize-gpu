@@ -11,7 +11,7 @@
 
 ## 🚀 自 `main` 分支出發後的優化與改良項目
 
-本分支 `feature/edge-guided-sampling` 主要加入了以下幾項調整與優化項目：
+本分支 `feature/edge-guided-sampling-v3` 在 v2 特性基礎上，進一步整合 `main` 分支的遊戲相容性修復：
 
 ### 1. CMA-ES 最佳化演算法 (Covariance Matrix Adaptation Evolution Strategy)
 * **原理說明**：使用協方差矩陣自適應進化策略（CMA-ES）來尋找橢圓的 5 維參數（中心位置 $X, Y$、長短軸半徑 $RX, RY$、旋轉角度 $\theta$）。
@@ -33,6 +33,12 @@
 
 ### 6. 車貼記憶體注入器 (Livery Memory Injector)
 * **說明**：新增獨立的記憶體匯入分頁。支援從本地歷史幾何 JSON 中進行選取，或拖曳上傳外部 JSON。透過 Node.js 後端安全調用 Windows VRAM 記憶體寫入核心，將幾何形狀資料熱注入 (Inject) 至遊戲當前的車貼圖層表中，實現無須在遊戲內手動繪製，便能一鍵熱渲染出精美幾何圖案。
+
+### 7. 遊戲尺度相容性懲罰 (Scale Compatibility Penalty)
+* **說明**：Forza 遊戲在匯入幾何時，對橢圓縮放比例（radius/63）進行小數點後兩位截斷。本機制在候選形狀篩選時，對無法被精準表示的縮放值加入懲罰項，優先採用截斷損失最小的橢圓尺寸，改善匯入後的實際渲染精度。前 8 個大型橢圓採用嚴格懲罰，後續形狀採用柔性偏置。
+
+### 8. 斷點續傳 (Checkpoint Resume)
+* **說明**：支援從先前已儲存的幾何 JSON 檔案中斷點恢復，繼續進行後續的形狀擬合。可透過 `--resume` CLI 參數或設定檔中的 `loadGeometry` 選項指定檢查點路徑。
 
 ---
 
@@ -59,7 +65,7 @@
 本分支提供基於網頁的控制台，方便在瀏覽器中操作並即時監看日誌與 Canvas 進度。
 
 ### 啟動步驟
-1. 確保已將編譯後的 Go 執行檔命名為 `forza-painter-geometrize-go-v1.0.exe` 並放置於專案根目錄下（若名稱不同，可修改 `server.js` 中的 `execPath` 配置）。
+1. 確保已將編譯後的 Go 執行檔命名為 `forza-painter-geometrize-go.exe` 並放置於專案根目錄下（若名稱不同，可修改 `server.js` 中的 `execPath` 配置）。
 2. 雙擊執行 `start_server.bat`，或在終端機手動執行：
    ```bash
    node server.js
@@ -89,7 +95,7 @@
 ### 命令行參數說明
 
 ```bash
-Usage: forza-painter-geometrize-go.exe [--settings path.ini|--profile name] [--output path] [--preview path] [--seed n] [--edge-weight w] [--multiscale] [--save-pass-previews] <image-path>
+Usage: forza-painter-geometrize-go.exe [--settings path.ini|--profile name] [--output path] [--preview path] [--seed n] [--edge-weight w] [--multiscale] [--save-pass-previews] [--resume checkpoint.json] <image-path>
 ```
 
 | 參數 | 說明 | 預設值 |
@@ -102,12 +108,17 @@ Usage: forza-painter-geometrize-go.exe [--settings path.ini|--profile name] [--o
 | `--edge-weight` | 邊緣引導重要性取樣權重（`0` 為停用，建議設為 `2.0` ~ `5.0`） | `-1.0` (停用) |
 | `--multiscale` | 啟用多尺度階層式擬合（Coarse-to-Fine） | `false` (關閉) |
 | `--save-pass-previews` | 在多尺度階層式擬合的每個 pass 結束後保存預覽圖 | `false` (關閉) |
+| `--resume` | 從指定的幾何 JSON 斷點檔案繼續擬合 | 空 |
 
 ### 命令行執行範例
 
 * **以 OpenCL 加速執行並啟用邊緣引導擬合與多尺度階層式擬合**：
   ```cmd
   forza-painter-geometrize-go.exe C:\work\forza\test.png --settings "C:\work\forza\settings\c.ini" --preview "C:\work\forza\preview.png" --edge-weight 3.0 --multiscale
+  ```
+* **從已存的 1500 形狀 checkpoint 繼續擬合至 3000 形狀**：
+  ```cmd
+  forza-painter-geometrize-go.exe C:\work\forza\test.png --settings "C:\work\forza\settings\c.ini" --resume "C:\work\forza\test_1500.json" --preview "C:\work\forza\preview.png"
   ```
 
 ---
