@@ -427,7 +427,7 @@ func seedValue(seed int64) int64 {
 func backgroundShape(p *imageutil.PreparedImage, score float64) model.Shape {
 	return model.Shape{
 		Type:  1,
-		Data:  []int{0, 0, p.Width, p.Height},
+		Data:  []float64{0, 0, float64(p.Width), float64(p.Height)},
 		Color: []int{int(p.BackgroundRGBA[0]), int(p.BackgroundRGBA[1]), int(p.BackgroundRGBA[2]), int(p.BackgroundRGBA[3])},
 		Score: score,
 	}
@@ -571,8 +571,8 @@ func randomCandidates(rng *rand.Rand, prepared *imageutil.PreparedImage, count i
 		out = append(out, model.Candidate{
 			X:     x,
 			Y:     y,
-			RX:    randRange(rng, minRadius, maxRadius),
-			RY:    randRange(rng, minRadius, maxRadius),
+			RX:    snapToValidRX(randRange(rng, minRadius, maxRadius)),
+			RY:    snapToValidRX(randRange(rng, minRadius, maxRadius)),
 			Theta: rng.Float32() * 360,
 			A:     alpha,
 		})
@@ -581,8 +581,8 @@ func randomCandidates(rng *rand.Rand, prepared *imageutil.PreparedImage, count i
 		out = append(out, model.Candidate{
 			X:     w * 0.5,
 			Y:     h * 0.5,
-			RX:    maxRadius * 0.25,
-			RY:    maxRadius * 0.25,
+			RX:    snapToValidRX(maxRadius * 0.25),
+			RY:    snapToValidRX(maxRadius * 0.25),
 			Theta: 0,
 			A:     1.0,
 		})
@@ -627,30 +627,25 @@ func scaleCompatibilityPenalty(c model.Candidate, acceptedShapes int) float32 {
 	if c.RX < 0 || c.RY < 0 {
 		return 0
 	}
-	const divisor = 63.0
+	// snapToValidRX guarantees the game-scale roundtrip is lossless for
+	// every candidate that reaches this function, so the tail after two-
+	// decimal truncation is always zero. We only keep the span-based bias
+	// that nudges the optimiser toward compact shapes.
 	rx := float64(maxInt(1, int(math.Round(float64(c.RX)))))
 	ry := float64(maxInt(1, int(math.Round(float64(c.RY)))))
-	scaleX := rx / divisor
-	scaleY := ry / divisor
-	tailX := scaleX - math.Trunc(scaleX*100.0)/100.0
-	tailY := scaleY - math.Trunc(scaleY*100.0)/100.0
 	span := math.Max(rx, ry)
-	tail := tailX + tailY
 
 	// Force the first few large ellipses to land on a scale that survives
 	// the game's two-decimal truncation with minimal loss.
 	if acceptedShapes < 8 && span >= 96 {
-		if tail > 0.003 {
-			return 1e9
-		}
-		return float32((tail * span * 50.0) + (span * span * 0.1))
+		return float32(span * span * 0.1)
 	}
 
 	// Smaller / later ellipses get a softer bias toward clean 63-based scales.
 	if span >= 96 {
-		return float32((tail * span * 8.0) + (span * 0.05))
+		return float32(span * 0.05)
 	}
-	return float32(tail * span * 2.0)
+	return 0
 }
 
 func toShape(c model.Candidate, score float64) model.Shape {
@@ -663,12 +658,12 @@ func toShape(c model.Candidate, score float64) model.Shape {
 	}
 	return model.Shape{
 		Type: 16,
-		Data: []int{
-			int(math.Round(float64(c.X))),
-			int(math.Round(float64(c.Y))),
-			maxInt(1, int(math.Round(float64(c.RX)))),
-			maxInt(1, int(math.Round(float64(c.RY)))),
-			angle,
+		Data: []float64{
+			float64(c.X),
+			float64(c.Y),
+			float64(c.RX),
+			float64(c.RY),
+			float64(angle),
 		},
 		Color: []int{int(f32ToByte(c.R)), int(f32ToByte(c.G)), int(f32ToByte(c.B)), int(f32ToByte(c.A))},
 		Score: score,
@@ -715,6 +710,17 @@ func resolveOutputBase(opts Options) string {
 
 func randRange(rng *rand.Rand, minV, maxV float32) float32 {
 	return minV + (maxV-minV)*rng.Float32()
+}
+
+// snapToValidRX snaps v to the nearest value v' such that v'/63 has at
+// most 2 decimal places. This requires v' = k · (63/100) = k · 0.63
+// for some integer k ≥ 1.
+func snapToValidRX(v float32) float32 {
+	k := float32(math.Round(float64(v) * (100.0 / 63.0)))
+	if k < 1 {
+		k = 1
+	}
+	return k * (63.0 / 100.0)
 }
 
 func savePreviewSnapshot(evaluator *gpu.Evaluator, opts Options, width, height, step int) error {
@@ -773,8 +779,8 @@ func normalizeScore(totalError, denom float64) float64 {
 func quantizeCandidate(c model.Candidate, width, height int, forceOpaque bool) model.Candidate {
 	c.X = float32(clampInt(int(math.Round(float64(c.X))), 0, maxInt(0, width-1)))
 	c.Y = float32(clampInt(int(math.Round(float64(c.Y))), 0, maxInt(0, height-1)))
-	c.RX = float32(maxInt(1, int(math.Round(float64(c.RX)))))
-	c.RY = float32(maxInt(1, int(math.Round(float64(c.RY)))))
+	c.RX = snapToValidRX(c.RX)
+	c.RY = snapToValidRX(c.RY)
 
 	angle := int(math.Round(float64(c.Theta))) % 360
 	if angle < 0 {

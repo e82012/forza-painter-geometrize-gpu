@@ -195,8 +195,8 @@ func (c *CMAESOptimizer) SamplePopulation(rng *rand.Rand) ([]model.Candidate, []
 		candidates[k] = model.Candidate{
 			X:     float32(x[0] * maxW),
 			Y:     float32(x[1] * maxH),
-			RX:    float32(1.0 + x[2]*(maxRad-1.0)),
-			RY:    float32(1.0 + x[3]*(maxRad-1.0)),
+			RX:    snapToValidRX(float32(1.0 + x[2]*(maxRad-1.0))),
+			RY:    snapToValidRX(float32(1.0 + x[3]*(maxRad-1.0))),
 			Theta: float32(x[4] * 360.0),
 			A:     c.alpha,
 		}
@@ -408,8 +408,8 @@ func (c *CMAESOptimizer) Best() model.Candidate {
 	return model.Candidate{
 		X:     float32(x0 * maxW),
 		Y:     float32(x1 * maxH),
-		RX:    float32(1.0 + x2*(maxRad-1.0)),
-		RY:    float32(1.0 + x3*(maxRad-1.0)),
+		RX:    snapToValidRX(float32(1.0 + x2*(maxRad-1.0))),
+		RY:    snapToValidRX(float32(1.0 + x3*(maxRad-1.0))),
 		Theta: float32(x4 * 360.0),
 		A:     c.alpha,
 	}

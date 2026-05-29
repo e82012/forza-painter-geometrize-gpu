@@ -34,8 +34,8 @@
 ### 6. 車貼記憶體注入器 (Livery Memory Injector)
 * **說明**：新增獨立的記憶體匯入分頁。支援從本地歷史幾何 JSON 中進行選取，或拖曳上傳外部 JSON。透過 Node.js 後端安全調用 Windows VRAM 記憶體寫入核心，將幾何形狀資料熱注入 (Inject) 至遊戲當前的車貼圖層表中，實現無須在遊戲內手動繪製，便能一鍵熱渲染出精美幾何圖案。
 
-### 7. 遊戲尺度相容性懲罰 (Scale Compatibility Penalty)
-* **說明**：Forza 遊戲在匯入幾何時，對橢圓縮放比例（radius/63）進行小數點後兩位截斷。本機制在候選形狀篩選時，對無法被精準表示的縮放值加入懲罰項，優先採用截斷損失最小的橢圓尺寸，改善匯入後的實際渲染精度。前 8 個大型橢圓採用嚴格懲罰，後續形狀採用柔性偏置。
+### 7. 無損尺度校準與浮點數高精度匯出 (Lossless Scale Snapping & Float Export)
+* **說明**：Forza 遊戲在匯入幾何時，對橢圓縮放比例（radius/63）進行小數點後兩位截斷。v3 整合了 `main` 的前置「無損對齊 (Snapping)」機制（`snapToValidRX`），讓所有生成的形狀天生符合截斷精度，大幅提升 GPU 搜尋效率。同時 JSON 數據升級為 `[]float64` 浮點數儲存，保證本地預覽與遊戲最終匯入效果完全無損一致 (Lossless Roundtrip)。
 
 ### 8. 斷點續傳 (Checkpoint Resume)
 * **說明**：支援從先前已儲存的幾何 JSON 檔案中斷點恢復，繼續進行後續的形狀擬合。可透過 `--resume` CLI 參數或設定檔中的 `loadGeometry` 選項指定檢查點路徑。

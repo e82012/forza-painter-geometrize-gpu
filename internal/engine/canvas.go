@@ -72,13 +72,13 @@ func RescaleShapeCoords(s model.Shape, scaleW, scaleH, origW, origH int) model.S
 	scaleY := float64(origH) / float64(scaleH)
 
 	scaled := s
-	scaled.Data = make([]int, len(s.Data))
+	scaled.Data = make([]float64, len(s.Data))
 	copy(scaled.Data, s.Data)
 
-	scaled.Data[0] = int(math.Round(float64(s.Data[0]) * scaleX))
-	scaled.Data[1] = int(math.Round(float64(s.Data[1]) * scaleY))
-	scaled.Data[2] = int(math.Round(float64(s.Data[2]) * scaleX))
-	scaled.Data[3] = int(math.Round(float64(s.Data[3]) * scaleY))
+	scaled.Data[0] = s.Data[0] * scaleX
+	scaled.Data[1] = s.Data[1] * scaleY
+	scaled.Data[2] = float64(snapToValidRX(float32(s.Data[2] * scaleX)))
+	scaled.Data[3] = float64(snapToValidRX(float32(s.Data[3] * scaleY)))
 	// Angle (Data[4]) remains unchanged
 
 	return scaled
