@@ -337,7 +337,7 @@ stopAt = ${config.stopAt}
         }
 
         // 啟動子進程
-        const execPath = path.join(__dirname, 'forza-painter-geometrize-go-v1.0.exe');
+        const execPath = path.join(__dirname, 'forza-painter-geometrize-go.exe');
         const ext = path.extname(reqData.filename);
         const base = path.basename(reqData.filename, ext);
         const args = [

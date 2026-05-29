@@ -855,3 +855,8 @@ func (e *Evaluator) SetEdgeMap(edgeMap []float32, weight float32) error {
 	}
 	return err
 }
+
+// SetEdgeWeight updates the edge map weight without re-uploading the map
+func (e *Evaluator) SetEdgeWeight(weight float32) {
+	e.edgeWeight = weight
+}

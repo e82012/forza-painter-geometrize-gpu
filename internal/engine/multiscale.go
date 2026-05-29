@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"math"
 	"math/rand"
 
 	"forza-painter-geometrize-go/internal/config"
@@ -190,6 +191,12 @@ func runPass(opts Options, cfg model.Settings, prepared *imageutil.PreparedImage
 		progress := float32(acceptedShapes) / float32(passCfg.ShapeCount)
 		evaluator.SampleStep = scoringSampleStep(cfg, progress)
 
+		// Apply Adaptive Edge Weight Decay: EdgeWeight scales from 0.2x at the start to 1.0x at the end
+		if passCfg.EdgeWeight > 0 {
+			decayFactor := 0.2 + 0.8*math.Pow(float64(progress), 1.2)
+			evaluator.SetEdgeWeight(float32(passCfg.EdgeWeight * decayFactor))
+		}
+
 		randomCands := randomCandidates(rng, prepared, cfg.RandomSamples, cfg.ForceOpaqueShapes, sampler, minRad, maxRad)
 
 		best, bestScore, err := submitAndPickBest(evaluator, randomCands, acceptedShapes+shapeOffset)
@@ -205,6 +212,9 @@ func runPass(opts Options, cfg model.Settings, prepared *imageutil.PreparedImage
 				MaxRad: maxRad,
 			}
 			cma := NewCMAES(best, initialSigma, lambda, bounds)
+
+			noImproveCnt := 0
+			prevBest := bestScore
 
 			for gen := 0; gen < generations; gen++ {
 				population, zVecs, yVecs := cma.SamplePopulation(rng)
@@ -243,6 +253,17 @@ func runPass(opts Options, cfg model.Settings, prepared *imageutil.PreparedImage
 				}
 
 				cma.Update(population, scores, zVecs, yVecs)
+
+				// Early termination check: if no improvement for 8 consecutive generations
+				if bestScore < prevBest-1e-8 {
+					noImproveCnt = 0
+					prevBest = bestScore
+				} else {
+					noImproveCnt++
+				}
+				if noImproveCnt >= 8 {
+					break
+				}
 			}
 		}
 

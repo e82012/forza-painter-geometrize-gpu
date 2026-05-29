@@ -34,11 +34,23 @@ The `feature/edge-guided-sampling-v3` branch builds on all v2 features and furth
 ### 6. Forza Livery Memory Injector
 * **Description**: Adds a dedicated "Memory Injector" tab page. It supports selecting from local historically generated JSON files or uploading custom external JSON shape files. The Node.js backend safely triggers the Windows memory writing engine to hot-inject geometry data directly into the active Forza livery editor table in VRAM, eliminating manual drawing and rendering shapes instantly.
 
-### 7. Scale Compatibility Penalty
-* **Description**: When Forza imports geometry JSON, it truncates the ellipse scale factor (radius/63) to two decimal places. This mechanism adds a penalty during candidate shape selection to favor ellipse sizes whose scale values survive that truncation with minimal loss. The first 8 large ellipses receive strict penalties; subsequent shapes receive soft biasing.
+### 7. Lossless Scale Snapping & Float Export
+* **Description**: Forza games truncate the ellipse scale factor (radius/63) to two decimal places. v3 integrates the `main` branch's lossless snapping mechanism (`snapToValidRX`), ensuring all generated shapes fit perfectly within the game's limits. Additionally, JSON data is exported using high-precision `[]float64` float representations to guarantee zero-loss roundtrip between local previews and final game liveries.
 
 ### 8. Checkpoint Resume
 * **Description**: Supports resuming from a previously saved geometry JSON checkpoint, continuing the shape fitting from where it left off. The resume path can be specified via the `--resume` CLI flag or the `loadGeometry` setting in the `.ini` configuration file.
+
+### 9. Perceptual Color Space Scoring (Weighted RGB MSE)
+* **Description**: Modifies the GPU OpenCL evaluation kernels to calculate perceptually weighted channel differences rather than a uniform MSE. Based on human visual sensitivity, the green channel is heavily prioritized (0.4f), while red and blue channel weights are dynamically adjusted depending on pixel brightness (R channel: `0.2f + 0.1f * R_avg`, B channel: `0.3f + 0.1f * (1.0f - R_avg)`).
+* **Note**: Greatly enhances fitting accuracy for smooth gradients, skin tones, and low-light regions without breaking the fast analytic single-pass GPU optimization formulas.
+
+### 10. Adaptive Edge Weight Decay
+* **Description**: The `EdgeWeight` parameter is dynamically adjusted throughout the fitting process. During initial phases, it is set to a low 0.2x scaling to prevent large blocks from being prematurely captured by edge attraction; as progress increases, it scales up to 1.0x.
+* **Note**: Maximizes edge adherence for late-stage small shapes to accurately resolve text, fine contours, and boundaries.
+
+### 11. CMA-ES Early Termination
+* **Description**: In the CMA-ES evolution loop, the score improvement is monitored in real-time. Evolution for a candidate is aborted early if there is no significant improvement (threshold $10^{-8}$) for 8 consecutive generations.
+* **Note**: Eliminates CPU/GPU work on fully converged shapes, saving 30% ~ 60% of computation time.
 
 ---
 

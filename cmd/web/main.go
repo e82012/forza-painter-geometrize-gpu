@@ -247,7 +247,7 @@ func runGeometrize(filename, iniPath string, stopAt int) {
 	outputPath := filepath.Join("img_json", base)
 
 	// 獲取執行檔絕對路徑
-	execPath, err := filepath.Abs("forza-painter-geometrize-go-v1.0.exe")
+	execPath, err := filepath.Abs("forza-painter-geometrize-go.exe")
 	if err != nil {
 		updateJobError("尋找執行檔失敗: " + err.Error())
 		return
