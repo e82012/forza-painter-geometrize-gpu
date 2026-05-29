@@ -94,7 +94,7 @@ __kernel void evaluate_candidates_v3(
     xMax = min(width - 1, xMax);
     yMax = min(height - 1, yMax);
 
-    // Per-channel statistics. 20 floats live in registers across the
+    // Per-channel statistics. 17 floats live in registers across the
     // bbox iteration; modern GPUs have plenty of headroom for this.
     int N = 0;   // opaque pixels inside the ellipse
     int Nt = 0;  // transparent pixels inside the ellipse (penalty bucket)
@@ -102,7 +102,6 @@ __kernel void evaluate_candidates_v3(
     float sCR = 0.0f, sCG = 0.0f, sCB = 0.0f, sCA = 0.0f;       // Σ current
     float sCR2 = 0.0f, sCG2 = 0.0f, sCB2 = 0.0f, sCA2 = 0.0f;   // Σ current²
     float sTCR = 0.0f, sTCG = 0.0f, sTCB = 0.0f, sTCA = 0.0f;   // Σ target·current
-    float sum_wr = 0.0f, sum_wg = 0.0f, sum_wb = 0.0f;          // Σ weight
 
     int sampleStride = max(sampleStep, 1);
 
@@ -125,25 +124,16 @@ __kernel void evaluate_candidates_v3(
             float4 t = target[p];
             float4 s = current[p];
 
-            float r_avg = (t.x + s.x) * 0.5f;
-            float wr = 0.2f + 0.1f * r_avg;
-            float wg = 0.4f;
-            float wb = 0.3f + 0.1f * (1.0f - r_avg);
-
-            sTR += wr * t.x; sTG += wg * t.y; sTB += wb * t.z; sTA += t.w;
-            sCR += wr * s.x; sCG += wg * s.y; sCB += wb * s.z; sCA += s.w;
-            sCR2 += wr * s.x * s.x;
-            sCG2 += wg * s.y * s.y;
-            sCB2 += wb * s.z * s.z;
+            sTR += t.x; sTG += t.y; sTB += t.z; sTA += t.w;
+            sCR += s.x; sCG += s.y; sCB += s.z; sCA += s.w;
+            sCR2 += s.x * s.x;
+            sCG2 += s.y * s.y;
+            sCB2 += s.z * s.z;
             sCA2 += s.w * s.w;
-            sTCR += wr * t.x * s.x;
-            sTCG += wg * t.y * s.y;
-            sTCB += wb * t.z * s.z;
+            sTCR += t.x * s.x;
+            sTCG += t.y * s.y;
+            sTCB += t.z * s.z;
             sTCA += t.w * s.w;
-            
-            sum_wr += wr;
-            sum_wg += wg;
-            sum_wb += wb;
             N++;
         }
     }
@@ -162,28 +152,29 @@ __kernel void evaluate_candidates_v3(
     }
 
     float Nf = (float)N;
+    float invN = 1.0f / Nf;
     float invA = 1.0f - ca;
 
-    // Optimal RGB color: c = (weighted_mean(t) − weighted_mean(s)·(1−α)) / α  (clamped).
+    // Optimal RGB color: c = (mean(t) − mean(s)·(1−α)) / α  (clamped).
     // The clamped color is what will actually be rendered, so we plug
     // that same value into the analytic ΔErr formula below — the
     // identity holds for any constant c, not just the unclamped optimum.
-    float oR = clamp((sTR / sum_wr - (sCR / sum_wr) * invA) / ca, 0.0f, 1.0f);
-    float oG = clamp((sTG / sum_wg - (sCG / sum_wg) * invA) / ca, 0.0f, 1.0f);
-    float oB = clamp((sTB / sum_wb - (sCB / sum_wb) * invA) / ca, 0.0f, 1.0f);
+    float oR = clamp((sTR * invN - (sCR * invN) * invA) / ca, 0.0f, 1.0f);
+    float oG = clamp((sTG * invN - (sCG * invN) * invA) / ca, 0.0f, 1.0f);
+    float oB = clamp((sTB * invN - (sCB * invN) * invA) / ca, 0.0f, 1.0f);
 
-    // Σ ΔErr = α²·[N·c² − 2c·Σs + Σs²] − 2α·[c·Σt − c·Σs − Σst + Σs²] (weighted per channel)
+    // Σ ΔErr = α²·[N·c² − 2c·Σs + Σs²] − 2α·[c·Σt − c·Σs − Σst + Σs²]
     //
     // RGB channels use the optimised c above. The alpha channel blends
     // toward 1 (out_a = s_a·(1−α) + α), so we substitute c = 1 below.
     float a2 = ca * ca;
     float two_a = 2.0f * ca;
 
-    float dR = a2 * (sum_wr*oR*oR - 2.0f*oR*sCR + sCR2)
+    float dR = a2 * (Nf*oR*oR - 2.0f*oR*sCR + sCR2)
              - two_a * (oR*sTR - oR*sCR - sTCR + sCR2);
-    float dG = a2 * (sum_wg*oG*oG - 2.0f*oG*sCG + sCG2)
+    float dG = a2 * (Nf*oG*oG - 2.0f*oG*sCG + sCG2)
              - two_a * (oG*sTG - oG*sCG - sTCG + sCG2);
-    float dB = a2 * (sum_wb*oB*oB - 2.0f*oB*sCB + sCB2)
+    float dB = a2 * (Nf*oB*oB - 2.0f*oB*sCB + sCB2)
              - two_a * (oB*sTB - oB*sCB - sTCB + sCB2);
     float dA = a2 * (Nf - 2.0f*sCA + sCA2)
              - two_a * (sTA - sCA - sTCA + sCA2);
@@ -274,7 +265,6 @@ __kernel void evaluate_candidates_v4(
     float sCR = 0.0f, sCG = 0.0f, sCB = 0.0f, sCA = 0.0f;
     float sCR2 = 0.0f, sCG2 = 0.0f, sCB2 = 0.0f, sCA2 = 0.0f;
     float sTCR = 0.0f, sTCG = 0.0f, sTCB = 0.0f, sTCA = 0.0f;
-    float sum_wr = 0.0f, sum_wg = 0.0f, sum_wb = 0.0f;
 
     int sampleStride = max(sampleStep, 1);
 
@@ -304,24 +294,18 @@ __kernel void evaluate_candidates_v4(
         float4 t = target[p];
         float4 s = current[p];
 
-        float r_avg = (t.x + s.x) * 0.5f;
-        float wr = 0.2f + 0.1f * r_avg;
-        float wg = 0.4f;
-        float wb = 0.3f + 0.1f * (1.0f - r_avg);
-
-        sTR += wr * t.x; sTG += wg * t.y; sTB += wb * t.z; sTA += t.w;
-        sCR += wr * s.x; sCG += wg * s.y; sCB += wb * s.z; sCA += s.w;
-        sCR2 += wr * s.x * s.x; sCG2 += wg * s.y * s.y;
-        sCB2 += wb * s.z * s.z; sCA2 += s.w * s.w;
-        sTCR += wr * t.x * s.x; sTCG += wg * t.y * s.y;
-        sTCB += wb * t.z * s.z; sTCA += t.w * s.w;
-        sum_wr += wr; sum_wg += wg; sum_wb += wb;
+        sTR += t.x; sTG += t.y; sTB += t.z; sTA += t.w;
+        sCR += s.x; sCG += s.y; sCB += s.z; sCA += s.w;
+        sCR2 += s.x * s.x; sCG2 += s.y * s.y;
+        sCB2 += s.z * s.z; sCA2 += s.w * s.w;
+        sTCR += t.x * s.x; sTCG += t.y * s.y;
+        sTCB += t.z * s.z; sTCA += t.w * s.w;
         N++;
     }
 
-    // Write partials to local memory (flat, 21 floats per work-item).
-    __local float l_data[WG_SIZE * 21];
-    int off = lid * 21;
+    // Write partials to local memory (flat, 18 floats per work-item).
+    __local float l_data[WG_SIZE * 18];
+    int off = lid * 18;
     l_data[off +  0] = (float)N;  l_data[off +  1] = (float)Nt;
     l_data[off +  2] = sTR;       l_data[off +  3] = sTG;
     l_data[off +  4] = sTB;       l_data[off +  5] = sTA;
@@ -331,17 +315,15 @@ __kernel void evaluate_candidates_v4(
     l_data[off + 12] = sCB2;      l_data[off + 13] = sCA2;
     l_data[off + 14] = sTCR;      l_data[off + 15] = sTCG;
     l_data[off + 16] = sTCB;      l_data[off + 17] = sTCA;
-    l_data[off + 18] = sum_wr;    l_data[off + 19] = sum_wg;
-    l_data[off + 20] = sum_wb;
 
     barrier(CLK_LOCAL_MEM_FENCE);
 
     // Tree reduction: log2(256) = 8 rounds.
     for (int stride = WG_SIZE / 2; stride > 0; stride >>= 1) {
         if (lid < stride) {
-            int a = lid * 21;
-            int b = (lid + stride) * 21;
-            for (int k = 0; k < 21; k++) {
+            int a = lid * 18;
+            int b = (lid + stride) * 18;
+            for (int k = 0; k < 18; k++) {
                 l_data[a + k] += l_data[b + k];
             }
         }
@@ -358,7 +340,6 @@ __kernel void evaluate_candidates_v4(
     sCR = l_data[6];  sCG = l_data[7];  sCB = l_data[8];  sCA = l_data[9];
     sCR2= l_data[10]; sCG2= l_data[11]; sCB2= l_data[12]; sCA2= l_data[13];
     sTCR= l_data[14]; sTCG= l_data[15]; sTCB= l_data[16]; sTCA= l_data[17];
-    sum_wr = l_data[18]; sum_wg = l_data[19]; sum_wb = l_data[20];
 
     // Hard reject (same thresholds as v3).
     if (N == 0 || Nt * 100 > N) {
@@ -370,20 +351,21 @@ __kernel void evaluate_candidates_v4(
     }
 
     float Nf = (float)N;
+    float invN = 1.0f / Nf;
     float invA = 1.0f - ca;
 
-    float oR = clamp((sTR / sum_wr - (sCR / sum_wr) * invA) / ca, 0.0f, 1.0f);
-    float oG = clamp((sTG / sum_wg - (sCG / sum_wg) * invA) / ca, 0.0f, 1.0f);
-    float oB = clamp((sTB / sum_wb - (sCB / sum_wb) * invA) / ca, 0.0f, 1.0f);
+    float oR = clamp((sTR * invN - (sCR * invN) * invA) / ca, 0.0f, 1.0f);
+    float oG = clamp((sTG * invN - (sCG * invN) * invA) / ca, 0.0f, 1.0f);
+    float oB = clamp((sTB * invN - (sCB * invN) * invA) / ca, 0.0f, 1.0f);
 
     float a2 = ca * ca;
     float two_a = 2.0f * ca;
 
-    float dR = a2 * (sum_wr*oR*oR - 2.0f*oR*sCR + sCR2)
+    float dR = a2 * (Nf*oR*oR - 2.0f*oR*sCR + sCR2)
              - two_a * (oR*sTR - oR*sCR - sTCR + sCR2);
-    float dG = a2 * (sum_wg*oG*oG - 2.0f*oG*sCG + sCG2)
+    float dG = a2 * (Nf*oG*oG - 2.0f*oG*sCG + sCG2)
              - two_a * (oG*sTG - oG*sCG - sTCG + sCG2);
-    float dB = a2 * (sum_wb*oB*oB - 2.0f*oB*sCB + sCB2)
+    float dB = a2 * (Nf*oB*oB - 2.0f*oB*sCB + sCB2)
              - two_a * (oB*sTB - oB*sCB - sTCB + sCB2);
     float dA = a2 * (Nf - 2.0f*sCA + sCA2)
              - two_a * (sTA - sCA - sTCA + sCA2);

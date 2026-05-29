@@ -2,8 +2,8 @@ package engine
 
 import (
 	"fmt"
-	"math"
 	"math/rand"
+	"time"
 
 	"forza-painter-geometrize-go/internal/config"
 	"forza-painter-geometrize-go/internal/gpu"
@@ -188,13 +188,13 @@ func runPass(opts Options, cfg model.Settings, prepared *imageutil.PreparedImage
 	if maxRad < minRad { maxRad = minRad + 1 }
 
 	for acceptedShapes < passCfg.ShapeCount {
+		stepStart := time.Now()
 		progress := float32(acceptedShapes) / float32(passCfg.ShapeCount)
 		evaluator.SampleStep = scoringSampleStep(cfg, progress)
 
-		// Apply Adaptive Edge Weight Decay: EdgeWeight scales from 0.2x at the start to 1.0x at the end
+		// Keep edge weight constant at the user-specified value to ensure strict edge guided detail alignment.
 		if passCfg.EdgeWeight > 0 {
-			decayFactor := 0.2 + 0.8*math.Pow(float64(progress), 1.2)
-			evaluator.SetEdgeWeight(float32(passCfg.EdgeWeight * decayFactor))
+			evaluator.SetEdgeWeight(float32(passCfg.EdgeWeight))
 		}
 
 		randomCands := randomCandidates(rng, prepared, cfg.RandomSamples, cfg.ForceOpaqueShapes, sampler, minRad, maxRad)
@@ -292,6 +292,16 @@ func runPass(opts Options, cfg model.Settings, prepared *imageutil.PreparedImage
 			fmt.Printf("[%s] %d/%d shapes added\n", passCfg.Name, acceptedShapes, passCfg.ShapeCount)
 		}
 
+		globalShapeCount := acceptedShapes + shapeOffset
+		if shouldSavePreview(globalShapeCount, cfg) {
+			if err := savePreviewSnapshot(evaluator, opts, prepared.Width, prepared.Height, globalShapeCount); err != nil {
+				return nil, err
+			}
+			if opts.PreviewPath != "" {
+				fmt.Printf("[%d/%d] Saved preview snapshot\n", globalShapeCount, cfg.StopAt)
+			}
+		}
+
 		if pendingGrid.Valid() {
 			grid, gridW, gridH, gErr := evaluator.WaitErrorGrid(pendingGrid)
 			if gErr != nil {
@@ -306,6 +316,8 @@ func runPass(opts Options, cfg model.Settings, prepared *imageutil.PreparedImage
 			return nil, gErr
 		}
 		pendingGrid = newTicket
+
+		fmt.Printf("[%d/%d] Step completed in %s\n", globalShapeCount, cfg.StopAt, time.Since(stepStart).Round(time.Millisecond))
 	}
 
 	if pendingGrid.Valid() {

@@ -169,10 +169,9 @@ func runSinglePass(opts Options, cfg model.Settings, prepared *imageutil.Prepare
 
 		evaluator.SampleStep = scoringSampleStep(cfg, progress)
 
-		// Apply Adaptive Edge Weight Decay: EdgeWeight scales from 0.2x at the start to 1.0x at the end
+		// Keep edge weight constant at the user-specified value to ensure strict edge guided detail alignment.
 		if cfg.EdgeWeight > 0 {
-			decayFactor := 0.2 + 0.8*math.Pow(float64(progress), 1.2)
-			evaluator.SetEdgeWeight(float32(cfg.EdgeWeight * decayFactor))
+			evaluator.SetEdgeWeight(float32(cfg.EdgeWeight))
 		}
 
 		// fmt.Printf("[%d/%d] Scoring sample step: %d\n",
@@ -782,12 +781,7 @@ func computeTotalError(target, current []float32, opaqueMask []uint8) (float64, 
 		db := float64(target[idx+2] - current[idx+2])
 		da := float64(target[idx+3] - current[idx+3])
 
-		rAvg := float64(target[idx+0]+current[idx+0]) * 0.5
-		wr := 0.2 + 0.1*rAvg
-		wg := 0.4
-		wb := 0.3 + 0.1*(1.0-rAvg)
-
-		total += wr*dr*dr + wg*dg*dg + wb*db*db + da*da
+		total += dr*dr + dg*dg + db*db + da*da
 	}
 	return total, opaquePixels
 }
