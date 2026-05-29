@@ -213,9 +213,6 @@ func runPass(opts Options, cfg model.Settings, prepared *imageutil.PreparedImage
 			}
 			cma := NewCMAES(best, initialSigma, lambda, bounds)
 
-			noImproveCnt := 0
-			prevBest := bestScore
-
 			for gen := 0; gen < generations; gen++ {
 				population, zVecs, yVecs := cma.SamplePopulation(rng)
 				t, err := evaluator.SubmitEval(population)
@@ -253,17 +250,6 @@ func runPass(opts Options, cfg model.Settings, prepared *imageutil.PreparedImage
 				}
 
 				cma.Update(population, scores, zVecs, yVecs)
-
-				// Early termination check: if no improvement for 8 consecutive generations
-				if bestScore < prevBest-1e-8 {
-					noImproveCnt = 0
-					prevBest = bestScore
-				} else {
-					noImproveCnt++
-				}
-				if noImproveCnt >= 8 {
-					break
-				}
 			}
 		}
 

@@ -187,7 +187,6 @@ func runSinglePass(opts Options, cfg model.Settings, prepared *imageutil.Prepare
 		}
 		fmt.Printf("[%d/%d] Random best delta: %.6f\n", step, cfg.StopAt, bestScore)
 
-		gensRun := 0
 		improved := 0
 		if generations > 0 && bestScore < 0 {
 			maxRad := progressiveMaxRadius(prepared.Width, prepared.Height, progress)
@@ -199,11 +198,7 @@ func runSinglePass(opts Options, cfg model.Settings, prepared *imageutil.Prepare
 			}
 			cma := NewCMAES(best, initialSigma, lambda, bounds)
 
-			noImproveCnt := 0
-			prevBest := bestScore
-
 			for gen := 0; gen < generations; gen++ {
-				gensRun = gen + 1
 				population, zVecs, yVecs := cma.SamplePopulation(rng)
 				t, err := evaluator.SubmitEval(population)
 				if err != nil {
@@ -247,23 +242,12 @@ func runSinglePass(opts Options, cfg model.Settings, prepared *imageutil.Prepare
 				}
 
 				cma.Update(population, scores, zVecs, yVecs)
-
-				// Early termination check: if no improvement for 8 consecutive generations
-				if bestScore < prevBest-1e-8 {
-					noImproveCnt = 0
-					prevBest = bestScore
-				} else {
-					noImproveCnt++
-				}
-				if noImproveCnt >= 8 {
-					break
-				}
 			}
 		}
 
 		if generations > 0 {
-			fmt.Printf("[%d/%d] CMA-ES best delta after %d/%d generations: %.6f (%d improvement(s))\n",
-				step, cfg.StopAt, gensRun, generations, bestScore, improved)
+			fmt.Printf("[%d/%d] CMA-ES best delta after %d generations: %.6f (%d improvement(s))\n",
+				step, cfg.StopAt, generations, bestScore, improved)
 		}
 
 		if bestScore >= minImproveDelta {
@@ -781,7 +765,12 @@ func computeTotalError(target, current []float32, opaqueMask []uint8) (float64, 
 		db := float64(target[idx+2] - current[idx+2])
 		da := float64(target[idx+3] - current[idx+3])
 
-		total += dr*dr + dg*dg + db*db + da*da
+		rAvg := float64(target[idx+0]+current[idx+0]) * 0.5
+		wr := 0.2 + 0.1*rAvg
+		wg := 0.4
+		wb := 0.3 + 0.1*(1.0-rAvg)
+
+		total += wr*dr*dr + wg*dg*dg + wb*db*db + da*da
 	}
 	return total, opaquePixels
 }
