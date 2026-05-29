@@ -835,9 +835,9 @@ input[type="number"]:focus {
 }
 
 .upload-zone.has-image .upload-preview-img {
-  max-height: 180px;
-  width: 100%;
-  object-fit: cover;
+  max-height: 240px;
+  max-width: 100%;
+  object-fit: contain;
   border-radius: var(--radius-md);
   border: none;
 }
