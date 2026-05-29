@@ -386,6 +386,13 @@ h1 {
   overflow: hidden; /* 折疊時裁剪以維持收合效果 */
 }
 
+#preprocessControls.collapsed {
+  max-height: 0 !important;
+  opacity: 0 !important;
+  pointer-events: none;
+  overflow: hidden;
+}
+
 .input-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

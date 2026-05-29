@@ -116,6 +116,35 @@
               </div>
             </div>
 
+            <!-- 圖片預處理配置 (可選) -->
+            <div class="preprocess-settings-container" style="margin-top: 16px; border-top: 1px solid var(--color-border); padding-top: 16px; margin-bottom: 16px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">
+                  <input type="checkbox" id="enablePreprocess" style="width: 16px; height: 16px; accent-color: var(--color-primary);"> 啟用圖片預處理 (扁平化 / 減少色階)
+                </label>
+              </div>
+              
+              <div id="preprocessControls" class="collapsed" style="transition: max-height 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.3s ease; max-height: 300px; opacity: 1; display: flex; flex-direction: column; gap: 12px; margin-top: 8px;">
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                  <label for="preprocessSmooth" style="font-size: 13px; color: var(--color-text-muted); display: flex; justify-content: space-between;">
+                    平滑降噪強度 (Bilateral Smoothing)
+                    <span id="preprocessSmoothVal">2px</span>
+                  </label>
+                  <input type="range" id="preprocessSmooth" min="0" max="10" step="0.5" value="2" style="width: 100%; accent-color: var(--color-primary);">
+                </div>
+                
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                  <label for="preprocessPosterize" style="font-size: 13px; color: var(--color-text-muted); display: flex; justify-content: space-between;">
+                    色階量化數量 (Posterize Colors)
+                    <span id="preprocessPosterizeVal">16 色</span>
+                  </label>
+                  <input type="range" id="preprocessPosterize" min="2" max="64" step="1" value="16" style="width: 100%; accent-color: var(--color-primary);">
+                </div>
+
+                <button class="btn-secondary" id="btnApplyPreprocess" style="width: 100%; padding: 8px; font-size: 13px; margin-top: 4px;" type="button">預處理圖像 (即時預覽)</button>
+              </div>
+            </div>
+
             <button class="btn-primary" id="btnStart" disabled>開始擬合生成</button>
           </div>
         </section>

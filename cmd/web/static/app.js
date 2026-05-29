@@ -40,6 +40,9 @@ document.addEventListener('DOMContentLoaded', () => {
   let selectedQuality = 'low';
   let pollIntervalId = null;
   let jobStartTime = null;
+  let selectedFileObject = null;
+  let originalImageSrc = '';
+  let preprocessedImageBlob = null;
 
   // 請求 Notification 權限
   if ('Notification' in window && Notification.permission === 'default') {
@@ -106,10 +109,13 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
+    selectedFileObject = file;
+
     // 本地預覽
     const reader = new FileReader();
     reader.onload = (e) => {
       uploadPreview.src = e.target.result;
+      originalImageSrc = e.target.result;
       uploadPrompt.classList.add('hidden');
       uploadPreviewContainer.classList.remove('hidden');
       dropZone.classList.add('has-image');
@@ -139,8 +145,14 @@ document.addEventListener('DOMContentLoaded', () => {
     .then(data => {
       if (data.status === 'success') {
         uploadedFilename = data.filename;
-        btnStart.disabled = false;
-        showToast('圖片上傳成功，準備擬合！', 'success');
+        showToast('圖片上傳成功！', 'success');
+
+        const enablePreprocess = document.getElementById('enablePreprocess');
+        if (enablePreprocess && enablePreprocess.checked) {
+          applyPreprocessing();
+        } else {
+          btnStart.disabled = false;
+        }
       } else {
         throw new Error(data.message || '上傳失敗');
       }
@@ -155,10 +167,160 @@ document.addEventListener('DOMContentLoaded', () => {
     fileInput.value = '';
     uploadedFilename = '';
     uploadPreview.src = '';
+    selectedFileObject = null;
+    originalImageSrc = '';
+    preprocessedImageBlob = null;
     uploadPrompt.classList.remove('hidden');
     uploadPreviewContainer.classList.add('hidden');
     dropZone.classList.remove('has-image');
     btnStart.disabled = true;
+
+    const enablePreprocess = document.getElementById('enablePreprocess');
+    if (enablePreprocess) {
+      enablePreprocess.checked = false;
+      document.getElementById('preprocessControls').classList.add('collapsed');
+    }
+  }
+
+  // ----------------------------------------------------
+  // 圖片預處理邏輯
+  // ----------------------------------------------------
+  const enablePreprocess = document.getElementById('enablePreprocess');
+  const preprocessControls = document.getElementById('preprocessControls');
+  const preprocessSmooth = document.getElementById('preprocessSmooth');
+  const preprocessSmoothVal = document.getElementById('preprocessSmoothVal');
+  const preprocessPosterize = document.getElementById('preprocessPosterize');
+  const preprocessPosterizeVal = document.getElementById('preprocessPosterizeVal');
+  const btnApplyPreprocess = document.getElementById('btnApplyPreprocess');
+
+  if (enablePreprocess) {
+    enablePreprocess.addEventListener('change', () => {
+      if (enablePreprocess.checked) {
+        preprocessControls.classList.remove('collapsed');
+        if (originalImageSrc) {
+          applyPreprocessing();
+        }
+      } else {
+        preprocessControls.classList.add('collapsed');
+        if (originalImageSrc) {
+          uploadPreview.src = originalImageSrc;
+          preprocessedImageBlob = null;
+          // 恢復原本的圖片檔案到後端
+          if (selectedFileObject) {
+            uploadFile(selectedFileObject);
+          }
+        }
+      }
+    });
+  }
+
+  if (preprocessSmooth) {
+    preprocessSmooth.addEventListener('input', () => {
+      preprocessSmoothVal.textContent = preprocessSmooth.value + 'px';
+    });
+  }
+
+  if (preprocessPosterize) {
+    preprocessPosterize.addEventListener('input', () => {
+      preprocessPosterizeVal.textContent = preprocessPosterize.value + ' 色';
+    });
+  }
+
+  if (btnApplyPreprocess) {
+    btnApplyPreprocess.addEventListener('click', () => {
+      applyPreprocessing();
+    });
+  }
+
+  function applyPreprocessing() {
+    if (!originalImageSrc) {
+      showToast('請先上傳圖片！', 'warning');
+      return;
+    }
+    showToast('正在預處理圖像...', 'info');
+    
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+
+      // 1. 設定平滑降噪強度 (Blur)
+      const blurRadius = parseFloat(preprocessSmooth.value);
+      if (blurRadius > 0) {
+        ctx.filter = `blur(${blurRadius}px)`;
+      }
+
+      // 2. 繪製原圖 (套用 CSS Filter)
+      ctx.drawImage(img, 0, 0);
+      ctx.filter = 'none'; // 重置濾鏡
+
+      // 3. 套用色階量化數量 (Posterize)
+      const levels = parseInt(preprocessPosterize.value, 10);
+      if (levels < 256) {
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = imgData.data;
+        const numValues = 256 / (levels - 1);
+        
+        for (let i = 0; i < data.length; i += 4) {
+          // R
+          data[i] = Math.round(data[i] / numValues) * numValues;
+          // G
+          data[i+1] = Math.round(data[i+1] / numValues) * numValues;
+          // B
+          data[i+2] = Math.round(data[i+2] / numValues) * numValues;
+        }
+        ctx.putImageData(imgData, 0, 0);
+      }
+
+      // 4. 更新預覽畫面
+      const dataUrl = canvas.toDataURL('image/png');
+      uploadPreview.src = dataUrl;
+
+      // 5. 轉換成 Blob 並上傳覆蓋
+      canvas.toBlob((blob) => {
+        preprocessedImageBlob = blob;
+        if (uploadedFilename) {
+          uploadPreprocessedBlob();
+        }
+      }, 'image/png');
+    };
+    img.src = originalImageSrc;
+  }
+
+  function uploadPreprocessedBlob() {
+    if (!preprocessedImageBlob || !uploadedFilename) return;
+    btnStart.disabled = true;
+
+    const file = new File([preprocessedImageBlob], decodeURIComponent(uploadedFilename), { type: 'image/png' });
+    
+    fetch('/api/upload', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'image/png',
+        'X-Filename': uploadedFilename
+      },
+      body: file
+    })
+    .then(res => {
+      if (!res.ok) throw new Error('預處理影像套用失敗');
+      return res.json();
+    })
+    .then(data => {
+      if (data.status === 'success') {
+        uploadedFilename = data.filename;
+        btnStart.disabled = false;
+        showToast('預處理影像套用成功！', 'success');
+      } else {
+        throw new Error(data.message || '套用失敗');
+      }
+    })
+    .catch(err => {
+      showToast('套用失敗: ' + err.message, 'error');
+      btnStart.disabled = false;
+    });
   }
 
   // ----------------------------------------------------
