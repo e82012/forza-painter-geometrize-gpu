@@ -506,6 +506,8 @@ func (e *Evaluator) SubmitEval(cands []model.Candidate) (EvalTicket, error) {
 			int32(e.width),
 			int32(e.height),
 			int32(e.SampleStep),
+			e.edgeMapBuffer,
+			e.edgeWeight,
 		); err != nil {
 			return EvalTicket{}, err
 		}
@@ -530,6 +532,8 @@ func (e *Evaluator) SubmitEval(cands []model.Candidate) (EvalTicket, error) {
 			int32(e.width),
 			int32(e.height),
 			int32(e.SampleStep),
+			e.edgeMapBuffer,
+			e.edgeWeight,
 		); err != nil {
 			return EvalTicket{}, err
 		}

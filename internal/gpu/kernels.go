@@ -28,6 +28,14 @@ package gpu
 //	Skipping the second bbox traversal halves the work-item runtime at
 //	the cost of ~17 extra register-resident accumulators per work-item.
 //
+//	Edge-aware scoring (v3 + edgeMap):
+//	  Each opaque pixel's contribution to the MSE statistics is now
+//	  multiplied by (1 + edgeWeight * edgeMap[p]). This means pixels on
+//	  sharp edges have a proportionally higher influence on the shape's
+//	  score, so the optimiser actively PREFERS candidates that cover
+//	  high-edge-density regions — not just samples them more often.
+//	  edgeWeight=0 disables this path and reverts to uniform MSE.
+//
 //	Output per candidate: 4 floats { score, R, G, B }. Score is summed
 //	over inside pixels (negative = better). Opaque pixels feed the
 //	optimal-color statistics; transparent pixels inside the ellipse are
@@ -59,7 +67,9 @@ __kernel void evaluate_candidates_v3(
     __global float* results,
     const int width,
     const int height,
-    const int sampleStep
+    const int sampleStep,
+    __global const float* edgeMap,
+    const float edgeWeight
 ) {
     int gid = get_global_id(0);
 
@@ -130,6 +140,14 @@ __kernel void evaluate_candidates_v3(
             float wg = 0.4f;
             float wb = 0.3f + 0.1f * (1.0f - r_avg);
 
+            // Edge-aware pixel weight: pixels on sharp edges get a higher
+            // multiplier so the optimiser actively rewards shapes that
+            // cover high-frequency boundaries. edgeWeight=0 is a no-op.
+            float edgeBoost = 1.0f + edgeWeight * edgeMap[p];
+            wr *= edgeBoost;
+            wg *= edgeBoost;
+            wb *= edgeBoost;
+
             sTR += wr * t.x; sTG += wg * t.y; sTB += wb * t.z; sTA += t.w;
             sCR += wr * s.x; sCG += wg * s.y; sCB += wb * s.z; sCA += s.w;
             sCR2 += wr * s.x * s.x;
@@ -140,7 +158,7 @@ __kernel void evaluate_candidates_v3(
             sTCG += wg * t.y * s.y;
             sTCB += wb * t.z * s.z;
             sTCA += t.w * s.w;
-            
+
             sum_wr += wr;
             sum_wg += wg;
             sum_wb += wb;
@@ -230,7 +248,9 @@ __kernel void evaluate_candidates_v4(
     __global float* results,
     const int width,
     const int height,
-    const int sampleStep
+    const int sampleStep,
+    __global const float* edgeMap,
+    const float edgeWeight
 ) {
     int gid = get_group_id(0);   // candidate index
     int lid = get_local_id(1) * get_local_size(0) + get_local_id(0); // 0..255
@@ -308,6 +328,12 @@ __kernel void evaluate_candidates_v4(
         float wr = 0.2f + 0.1f * r_avg;
         float wg = 0.4f;
         float wb = 0.3f + 0.1f * (1.0f - r_avg);
+
+        // Edge-aware pixel weight (same logic as v3).
+        float edgeBoost = 1.0f + edgeWeight * edgeMap[p];
+        wr *= edgeBoost;
+        wg *= edgeBoost;
+        wb *= edgeBoost;
 
         sTR += wr * t.x; sTG += wg * t.y; sTB += wb * t.z; sTA += t.w;
         sCR += wr * s.x; sCG += wg * s.y; sCB += wb * s.z; sCA += s.w;
