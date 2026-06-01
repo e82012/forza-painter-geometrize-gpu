@@ -104,7 +104,7 @@ __kernel void evaluate_candidates_v3(
     xMax = min(width - 1, xMax);
     yMax = min(height - 1, yMax);
 
-    // Per-channel statistics. 17 floats live in registers across the
+    // Per-channel statistics. 18 floats live in registers across the
     // bbox iteration; modern GPUs have plenty of headroom for this.
     int N = 0;   // opaque pixels inside the ellipse
     int Nt = 0;  // transparent pixels inside the ellipse (penalty bucket)
@@ -113,6 +113,7 @@ __kernel void evaluate_candidates_v3(
     float sCR2 = 0.0f, sCG2 = 0.0f, sCB2 = 0.0f, sCA2 = 0.0f;   // Σ current²
     float sTCR = 0.0f, sTCG = 0.0f, sTCB = 0.0f, sTCA = 0.0f;   // Σ target·current
     float sum_wr = 0.0f, sum_wg = 0.0f, sum_wb = 0.0f;          // Σ weight
+    float sumEdge = 0.0f;                                        // Σ edgeMap (for post-hoc scaling)
 
     int sampleStride = max(sampleStep, 1);
 
@@ -140,14 +141,6 @@ __kernel void evaluate_candidates_v3(
             float wg = 0.4f;
             float wb = 0.3f + 0.1f * (1.0f - r_avg);
 
-            // Edge-aware pixel weight: pixels on sharp edges get a higher
-            // multiplier so the optimiser actively rewards shapes that
-            // cover high-frequency boundaries. edgeWeight=0 is a no-op.
-            float edgeBoost = 1.0f + edgeWeight * edgeMap[p];
-            wr *= edgeBoost;
-            wg *= edgeBoost;
-            wb *= edgeBoost;
-
             sTR += wr * t.x; sTG += wg * t.y; sTB += wb * t.z; sTA += t.w;
             sCR += wr * s.x; sCG += wg * s.y; sCB += wb * s.z; sCA += s.w;
             sCR2 += wr * s.x * s.x;
@@ -162,6 +155,7 @@ __kernel void evaluate_candidates_v3(
             sum_wr += wr;
             sum_wg += wg;
             sum_wb += wb;
+            sumEdge += edgeMap[p];
             N++;
         }
     }
@@ -218,6 +212,17 @@ __kernel void evaluate_candidates_v3(
     if (Nt > 0) {
         float penalty = a2 * ((float)Nt) * (oR*oR + oG*oG + oB*oB + 1.0f);
         totalDelta += penalty;
+    }
+
+    // Edge-aware post-hoc scaling: reward shapes whose footprint covers
+    // high-edge-density regions. The optimal color above was computed
+    // from UNBIASED channel weights, so it remains colour-accurate.
+    // The scaling only magnifies the (already negative) delta for shapes
+    // on edges, making the optimiser prefer them over equal-delta flat
+    // shapes. edgeWeight=0 → multiplier is 1.0, no effect.
+    if (edgeWeight > 0.0f && N > 0) {
+        float avgEdge = sumEdge / (float)N;
+        totalDelta *= (1.0f + edgeWeight * avgEdge);
     }
 
     results[gid * 4 + 0] = totalDelta;
@@ -295,6 +300,7 @@ __kernel void evaluate_candidates_v4(
     float sCR2 = 0.0f, sCG2 = 0.0f, sCB2 = 0.0f, sCA2 = 0.0f;
     float sTCR = 0.0f, sTCG = 0.0f, sTCB = 0.0f, sTCA = 0.0f;
     float sum_wr = 0.0f, sum_wg = 0.0f, sum_wb = 0.0f;
+    float sumEdge = 0.0f;
 
     int sampleStride = max(sampleStep, 1);
 
@@ -329,12 +335,6 @@ __kernel void evaluate_candidates_v4(
         float wg = 0.4f;
         float wb = 0.3f + 0.1f * (1.0f - r_avg);
 
-        // Edge-aware pixel weight (same logic as v3).
-        float edgeBoost = 1.0f + edgeWeight * edgeMap[p];
-        wr *= edgeBoost;
-        wg *= edgeBoost;
-        wb *= edgeBoost;
-
         sTR += wr * t.x; sTG += wg * t.y; sTB += wb * t.z; sTA += t.w;
         sCR += wr * s.x; sCG += wg * s.y; sCB += wb * s.z; sCA += s.w;
         sCR2 += wr * s.x * s.x; sCG2 += wg * s.y * s.y;
@@ -342,12 +342,13 @@ __kernel void evaluate_candidates_v4(
         sTCR += wr * t.x * s.x; sTCG += wg * t.y * s.y;
         sTCB += wb * t.z * s.z; sTCA += t.w * s.w;
         sum_wr += wr; sum_wg += wg; sum_wb += wb;
+        sumEdge += edgeMap[p];
         N++;
     }
 
-    // Write partials to local memory (flat, 21 floats per work-item).
-    __local float l_data[WG_SIZE * 21];
-    int off = lid * 21;
+    // Write partials to local memory (flat, 22 floats per work-item).
+    __local float l_data[WG_SIZE * 22];
+    int off = lid * 22;
     l_data[off +  0] = (float)N;  l_data[off +  1] = (float)Nt;
     l_data[off +  2] = sTR;       l_data[off +  3] = sTG;
     l_data[off +  4] = sTB;       l_data[off +  5] = sTA;
@@ -358,16 +359,16 @@ __kernel void evaluate_candidates_v4(
     l_data[off + 14] = sTCR;      l_data[off + 15] = sTCG;
     l_data[off + 16] = sTCB;      l_data[off + 17] = sTCA;
     l_data[off + 18] = sum_wr;    l_data[off + 19] = sum_wg;
-    l_data[off + 20] = sum_wb;
+    l_data[off + 20] = sum_wb;    l_data[off + 21] = sumEdge;
 
     barrier(CLK_LOCAL_MEM_FENCE);
 
     // Tree reduction: log2(256) = 8 rounds.
     for (int stride = WG_SIZE / 2; stride > 0; stride >>= 1) {
         if (lid < stride) {
-            int a = lid * 21;
-            int b = (lid + stride) * 21;
-            for (int k = 0; k < 21; k++) {
+            int a = lid * 22;
+            int b = (lid + stride) * 22;
+            for (int k = 0; k < 22; k++) {
                 l_data[a + k] += l_data[b + k];
             }
         }
@@ -385,6 +386,7 @@ __kernel void evaluate_candidates_v4(
     sCR2= l_data[10]; sCG2= l_data[11]; sCB2= l_data[12]; sCA2= l_data[13];
     sTCR= l_data[14]; sTCG= l_data[15]; sTCB= l_data[16]; sTCA= l_data[17];
     sum_wr = l_data[18]; sum_wg = l_data[19]; sum_wb = l_data[20];
+    sumEdge = l_data[21];
 
     // Hard reject (same thresholds as v3).
     if (N == 0 || Nt * 100 > N) {
@@ -421,6 +423,12 @@ __kernel void evaluate_candidates_v4(
 
     if (Nt > 0) {
         totalDelta += a2 * ((float)Nt) * (oR*oR + oG*oG + oB*oB + 1.0f);
+    }
+
+    // Edge-aware post-hoc scaling (same logic as v3).
+    if (edgeWeight > 0.0f && N > 0) {
+        float avgEdge = sumEdge / (float)N;
+        totalDelta *= (1.0f + edgeWeight * avgEdge);
     }
 
     results[gid * 4 + 0] = totalDelta;
