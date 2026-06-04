@@ -17,11 +17,11 @@ func DefaultSettings() model.Settings {
 		MaxPreviewSize:                500,
 		MaxResolution:                 2000,
 		MaxThreads:                    0,
-		MutatedSamples:                1000,
+		MutatedSamples:                15000,
 		ForceOpaqueShapes:             false,
 		PosterizeLevels:               20,
 		PreviewEvery:                  10,
-		RandomSamples:                 3000,
+		RandomSamples:                 200000,
 		SaveAt:                        map[int]struct{}{500: {}, 1000: {}, 1500: {}, 2000: {}, 2500: {}, 3000: {}},
 		SaveEvery:                     10,
 		StopAt:                        3000,
@@ -34,6 +34,18 @@ func DefaultSettings() model.Settings {
 		EdgeWeight:                    0.0,
 		MultiScale:                    false,
 		SavePassPreviews:              false,
+		LogoHardEdges:                 false,
+		PreprocessMode:                "none",
+		EnableTwoStageRandom:          true,
+		TwoStageRandomStart:           0.0,
+		RandomCoarseSampleStep:        2,
+		RandomRefineTopK:              2048,
+		EnableLateSmallCandidates:     true,
+		LateSmallCandidateShare:       0.66,
+		LateSmallCandidateStart:       0.5,
+		LateSmallCandidateRadiusFrac:  0.024,
+		EnablePruning:                 true,
+		PruneThreshold:                0.0000001,
 	}
 }
 
@@ -134,6 +146,30 @@ func ParseSettings(path string) (model.Settings, error) {
 			cfg.SavePassPreviews = parseBool(value, cfg.SavePassPreviews)
 		case "loadGeometry":
 			cfg.LoadGeometry = value
+		case "logoHardEdges":
+			cfg.LogoHardEdges = parseBool(value, cfg.LogoHardEdges)
+		case "preprocessMode":
+			cfg.PreprocessMode = value
+		case "enableTwoStageRandom":
+			cfg.EnableTwoStageRandom = parseBool(value, cfg.EnableTwoStageRandom)
+		case "twoStageRandomStart":
+			cfg.TwoStageRandomStart = parseFloat(value, cfg.TwoStageRandomStart)
+		case "randomCoarseSampleStep":
+			cfg.RandomCoarseSampleStep = parseInt(value, cfg.RandomCoarseSampleStep)
+		case "randomRefineTopK":
+			cfg.RandomRefineTopK = parseInt(value, cfg.RandomRefineTopK)
+		case "enableLateSmallCandidates":
+			cfg.EnableLateSmallCandidates = parseBool(value, cfg.EnableLateSmallCandidates)
+		case "lateSmallCandidateShare":
+			cfg.LateSmallCandidateShare = parseFloat(value, cfg.LateSmallCandidateShare)
+		case "lateSmallCandidateStart":
+			cfg.LateSmallCandidateStart = parseFloat(value, cfg.LateSmallCandidateStart)
+		case "lateSmallCandidateRadiusFrac":
+			cfg.LateSmallCandidateRadiusFrac = parseFloat(value, cfg.LateSmallCandidateRadiusFrac)
+		case "enablePruning":
+			cfg.EnablePruning = parseBool(value, cfg.EnablePruning)
+		case "pruneThreshold":
+			cfg.PruneThreshold = parseFloat64(value, cfg.PruneThreshold)
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -185,6 +221,14 @@ func parseFloat(value string, fallback float32) float32 {
 		return fallback
 	}
 	return float32(n)
+}
+
+func parseFloat64(value string, fallback float64) float64 {
+	n, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil {
+		return fallback
+	}
+	return n
 }
 
 func parseBool(value string, fallback bool) bool {

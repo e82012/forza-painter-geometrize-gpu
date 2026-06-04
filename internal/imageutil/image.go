@@ -12,13 +12,14 @@ import (
 )
 
 type PreparedImage struct {
-	Width           int
-	Height          int
-	Target          []float32
-	Current         []float32
-	OpaqueMask      []uint8
-	HasTransparency bool
-	BackgroundRGBA  [4]uint8
+	Width            int
+	Height           int
+	Target           []float32
+	GenerationTarget []float32
+	Current          []float32
+	OpaqueMask       []uint8
+	HasTransparency  bool
+	BackgroundRGBA   [4]uint8
 }
 
 func LoadAndPrepare(path string, maxResolution int) (*PreparedImage, error) {
@@ -121,13 +122,14 @@ func LoadAndPrepare(path string, maxResolution int) (*PreparedImage, error) {
 	}
 
 	return &PreparedImage{
-		Width:           w,
-		Height:          h,
-		Target:          target,
-		Current:         current,
-		OpaqueMask:      mask,
-		HasTransparency: hasTransparency,
-		BackgroundRGBA:  bg,
+		Width:            w,
+		Height:           h,
+		Target:           target,
+		GenerationTarget: target,
+		Current:          current,
+		OpaqueMask:       mask,
+		HasTransparency:  hasTransparency,
+		BackgroundRGBA:   bg,
 	}, nil
 }
 

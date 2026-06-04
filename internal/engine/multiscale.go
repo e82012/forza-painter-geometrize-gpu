@@ -36,6 +36,93 @@ func Run(opts Options) error {
 		return err
 	}
 
+	// Profile source image
+	profile := imageutil.ProfileImage(prepared.Target, prepared.Width, prepared.Height)
+	fmt.Printf("\n=== [Source Art Profiling] ===\n")
+	fmt.Printf("Alpha Coverage:  %.4f\n", profile.AlphaCoverage)
+	fmt.Printf("Edge Density:    %.4f\n", profile.EdgeDensity)
+	fmt.Printf("Luma Std Dev:    %.4f\n", profile.LumaStd)
+	fmt.Printf("White Fraction:  %.4f\n", profile.WhiteFraction)
+	fmt.Printf("Detected Class:  %s\n", profile.Category)
+	fmt.Printf("Recommended Luma Prep: %s\n", profile.RecommendedLumaPrep)
+	fmt.Printf("Recommendation:  %s\n", profile.Recommendation)
+	fmt.Printf("==============================\n\n")
+
+	// Phase 1: Source Pre-Processing Pipeline
+	report := imageutil.FringeReport{Enabled: false}
+	prepared.Target, report = imageutil.RemoveAlphaFringe(prepared.Target, prepared.Width, prepared.Height)
+	if report.Changed {
+		fmt.Printf("[AlphaFringe] Removed %d low-alpha fringe pixels (%.3f%%)\n", report.RemovedPixels, report.RemovedFraction*100.0)
+	}
+
+	if cfg.LogoHardEdges {
+		prepared.Target = imageutil.ApplyLogoHardEdges(prepared.Target, prepared.Width, prepared.Height, 96.0/255.0)
+		fmt.Printf("[LogoHardEdges] Logo hard edges applied, visible alpha snapped to opaque\n")
+	}
+
+	// Initialize GenerationTarget
+	prepared.GenerationTarget = prepared.Target
+	if cfg.PreprocessMode == "luma_bands" {
+		prepared.GenerationTarget = imageutil.ApplyLumaBands(prepared.Target, prepared.Width, prepared.Height, 64.0)
+		fmt.Printf("[LumaBands] Luma bands prep applied for candidate generation\n")
+	}
+
+	// Recompute OpaqueMask and background/current if target was changed by preprocessing
+	if report.Changed || cfg.LogoHardEdges {
+		var sumR, sumG, sumB, sumA float64
+		var opaqueCount float64
+		hasTransparency := false
+		w, h := prepared.Width, prepared.Height
+		for y := 0; y < h; y++ {
+			for x := 0; x < w; x++ {
+				idx := (y*w + x) * 4
+				r := prepared.Target[idx+0]
+				g := prepared.Target[idx+1]
+				b := prepared.Target[idx+2]
+				a := prepared.Target[idx+3]
+
+				if a > 0.001 {
+					prepared.OpaqueMask[y*w+x] = 1
+					sumR += float64(r)
+					sumG += float64(g)
+					sumB += float64(b)
+					sumA += float64(a)
+					opaqueCount++
+				} else {
+					prepared.OpaqueMask[y*w+x] = 0
+					hasTransparency = true
+				}
+			}
+		}
+
+		bg := [4]uint8{0, 0, 0, 255}
+		if opaqueCount > 0 {
+			bg[0] = uint8(clamp255(sumR / opaqueCount * 255.0))
+			bg[1] = uint8(clamp255(sumG / opaqueCount * 255.0))
+			bg[2] = uint8(clamp255(sumB / opaqueCount * 255.0))
+			bg[3] = uint8(clamp255(sumA / opaqueCount * 255.0))
+		}
+		if hasTransparency {
+			bg[3] = 0
+		}
+		prepared.BackgroundRGBA = bg
+		prepared.HasTransparency = hasTransparency
+
+		for i := 0; i < len(prepared.Current); i += 4 {
+			if hasTransparency {
+				prepared.Current[i+0] = 0
+				prepared.Current[i+1] = 0
+				prepared.Current[i+2] = 0
+				prepared.Current[i+3] = 0
+			} else {
+				prepared.Current[i+0] = float32(bg[0]) / 255.0
+				prepared.Current[i+1] = float32(bg[1]) / 255.0
+				prepared.Current[i+2] = float32(bg[2]) / 255.0
+				prepared.Current[i+3] = 1.0
+			}
+		}
+	}
+
 	if opts.EdgeWeight >= 0 {
 		cfg.EdgeWeight = opts.EdgeWeight
 	}
@@ -45,6 +132,14 @@ func Run(opts Options) error {
 	}
 	if opts.SavePassPreviews {
 		cfg.SavePassPreviews = true
+	}
+	if opts.PreprocessMode != "" {
+		cfg.PreprocessMode = opts.PreprocessMode
+	}
+	if opts.LogoHardEdges == "true" {
+		cfg.LogoHardEdges = true
+	} else if opts.LogoHardEdges == "false" {
+		cfg.LogoHardEdges = false
 	}
 
 	if cfg.MultiScale {
@@ -125,6 +220,10 @@ func runMultiScale(opts Options, cfg model.Settings, prepared *imageutil.Prepare
 	}
 
 	finalShapes := append([]model.Shape{backgroundShape(prepared, 0)}, allShapes...)
+	if cfg.EnablePruning {
+		finalShapes = PruneShapes(prepared.Target, prepared.OpaqueMask, prepared.Width, prepared.Height, finalShapes, cfg.PruneThreshold, prepared.BackgroundRGBA, prepared.HasTransparency)
+	}
+
 	if err := output.SaveGeometry(output.BuildFinalOutputPath(resolveOutputBase(opts)), finalShapes); err != nil {
 		return err
 	}
@@ -150,11 +249,11 @@ func runPass(opts Options, cfg model.Settings, prepared *imageutil.PreparedImage
 	defer evaluator.Close()
 
 	if passCfg.EdgeWeight > 0 {
-		edgeMap := ComputeEdgeMap(prepared.Target, prepared.Width, prepared.Height)
-		if err := evaluator.SetEdgeMap(edgeMap, float32(passCfg.EdgeWeight)); err != nil {
+		importanceMap := ComputeImportanceMap(prepared.Target, prepared.Width, prepared.Height)
+		if err := evaluator.SetEdgeMap(importanceMap, float32(passCfg.EdgeWeight)); err != nil {
 			return nil, err
 		}
-		fmt.Printf("[EdgeGuided] Edge map computed and uploaded to GPU, weight=%.1f\n", passCfg.EdgeWeight)
+		fmt.Printf("[ImportanceMap] Composite importance map computed and uploaded to GPU, weight=%.1f\n", passCfg.EdgeWeight)
 	}
 
 	evaluator.UseWorkGroupEval = cfg.UseWorkGroupEval
@@ -197,9 +296,9 @@ func runPass(opts Options, cfg model.Settings, prepared *imageutil.PreparedImage
 			evaluator.SetEdgeWeight(float32(passCfg.EdgeWeight))
 		}
 
-		randomCands := randomCandidates(rng, prepared, cfg.RandomSamples, cfg.ForceOpaqueShapes, sampler, minRad, maxRad)
+		randomCands := randomCandidates(rng, prepared, cfg.RandomSamples, cfg.ForceOpaqueShapes, sampler, minRad, maxRad, progress, cfg)
 
-		best, bestScore, err := submitAndPickBest(evaluator, randomCands, acceptedShapes+shapeOffset)
+		best, bestScore, err := submitAndPickBestTwoStage(evaluator, randomCands, acceptedShapes+shapeOffset, progress, cfg)
 		if err != nil {
 			return nil, err
 		}
@@ -314,3 +413,14 @@ func runPass(opts Options, cfg model.Settings, prepared *imageutil.PreparedImage
 
 	return shapes, nil
 }
+
+func clamp255(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 255 {
+		return 255
+	}
+	return v
+}
+

@@ -21,11 +21,13 @@ func main() {
 	multiScale := flag.Bool("multiscale", false, "Enable multi-scale hierarchical fitting")
 	savePassPreviews := flag.Bool("save-pass-previews", false, "Save preview image after each pass")
 	resumePath := flag.String("resume", "", "Resume from a saved geometry checkpoint JSON")
+	preprocessMode := flag.String("preprocess-mode", "", "Preprocessing mode (e.g. luma_bands, none)")
+	logoHardEdges := flag.String("logo-hard-edges", "", "Logo hard edge preprocessing override (true or false)")
 	flag.Parse()
-	applyTrailingOptions(flag.Args()[1:], settingsPath, profile, outputPath, previewPath, seed, edgeWeight, multiScale, savePassPreviews, resumePath)
+	applyTrailingOptions(flag.Args()[1:], settingsPath, profile, outputPath, previewPath, seed, edgeWeight, multiScale, savePassPreviews, resumePath, preprocessMode, logoHardEdges)
 
 	if flag.NArg() < 1 {
-		fmt.Println("Usage: forza-painter-geometrize-go.exe [--settings path.ini|--profile name] [--output path] [--preview path] [--seed n] [--edge-weight w] [--multiscale] [--save-pass-previews] [--resume checkpoint.json] <image-path>")
+		fmt.Println("Usage: forza-painter-geometrize-go.exe [--settings path.ini|--profile name] [--output path] [--preview path] [--seed n] [--edge-weight w] [--multiscale] [--save-pass-previews] [--resume checkpoint.json] [--preprocess-mode mode] [--logo-hard-edges true|false] <image-path>")
 		os.Exit(1)
 	}
 
@@ -33,17 +35,19 @@ func main() {
 	absRoot, _ := os.Getwd()
 
 	opts := engine.Options{
-		ImagePath:     imagePath,
-		SettingsPath:  *settingsPath,
-		Profile:       *profile,
-		OutputPath:    normalizeOutput(*outputPath),
-		PreviewPath:   normalizePreviewPath(*previewPath),
-		WorkspaceRoot: absRoot,
-		Seed:          *seed,
-		EdgeWeight:       *edgeWeight,
-		MultiScale:       *multiScale,
+		ImagePath:      imagePath,
+		SettingsPath:   *settingsPath,
+		Profile:        *profile,
+		OutputPath:     normalizeOutput(*outputPath),
+		PreviewPath:    normalizePreviewPath(*previewPath),
+		WorkspaceRoot:  absRoot,
+		Seed:           *seed,
+		EdgeWeight:     *edgeWeight,
+		MultiScale:     *multiScale,
 		SavePassPreviews: *savePassPreviews,
-		ResumePath:       *resumePath,
+		ResumePath:     *resumePath,
+		PreprocessMode: *preprocessMode,
+		LogoHardEdges:  *logoHardEdges,
 	}
 
 	if err := engine.Run(opts); err != nil {
@@ -82,7 +86,7 @@ func normalizePreviewPath(path string) string {
 	return abs
 }
 
-func applyTrailingOptions(extra []string, settingsPath, profile, outputPath, previewPath *string, seed *int64, edgeWeight *float64, multiScale, savePassPreviews *bool, resumePath *string) {
+func applyTrailingOptions(extra []string, settingsPath, profile, outputPath, previewPath *string, seed *int64, edgeWeight *float64, multiScale, savePassPreviews *bool, resumePath, preprocessMode, logoHardEdges *string) {
 	for i := 0; i < len(extra); i++ {
 		arg := extra[i]
 		next := func() (string, bool) {
@@ -131,6 +135,14 @@ func applyTrailingOptions(extra []string, settingsPath, profile, outputPath, pre
 		case "--resume", "-resume":
 			if v, ok := next(); ok {
 				*resumePath = v
+			}
+		case "--preprocess-mode", "-preprocess-mode":
+			if v, ok := next(); ok {
+				*preprocessMode = v
+			}
+		case "--logo-hard-edges", "-logo-hard-edges":
+			if v, ok := next(); ok {
+				*logoHardEdges = v
 			}
 		}
 	}

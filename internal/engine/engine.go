@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/rand"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"forza-painter-geometrize-go/internal/gpu"
@@ -26,6 +27,8 @@ type Options struct {
 	MultiScale       bool
 	SavePassPreviews bool
 	ResumePath       string
+	PreprocessMode   string
+	LogoHardEdges    string
 }
 
 const (
@@ -53,11 +56,11 @@ func runSinglePass(opts Options, cfg model.Settings, prepared *imageutil.Prepare
 	defer evaluator.Close()
 
 	if cfg.EdgeWeight > 0 {
-		edgeMap := ComputeEdgeMap(prepared.Target, prepared.Width, prepared.Height)
-		if err := evaluator.SetEdgeMap(edgeMap, float32(cfg.EdgeWeight)); err != nil {
+		importanceMap := ComputeImportanceMap(prepared.Target, prepared.Width, prepared.Height)
+		if err := evaluator.SetEdgeMap(importanceMap, float32(cfg.EdgeWeight)); err != nil {
 			return err
 		}
-		fmt.Printf("[EdgeGuided] Edge map computed and uploaded to GPU, weight=%.1f\n", cfg.EdgeWeight)
+		fmt.Printf("[ImportanceMap] Composite importance map computed and uploaded to GPU, weight=%.1f\n", cfg.EdgeWeight)
 	}
 
 	evaluator.UseWorkGroupEval = cfg.UseWorkGroupEval
@@ -178,10 +181,10 @@ func runSinglePass(opts Options, cfg model.Settings, prepared *imageutil.Prepare
 		// 	step, cfg.StopAt, evaluator.SampleStep)
 
 		maxRad := progressiveMaxRadius(prepared.Width, prepared.Height, progress)
-		randomCands := randomCandidates(rng, prepared, cfg.RandomSamples, cfg.ForceOpaqueShapes, sampler, 2.0, maxRad)
+		randomCands := randomCandidates(rng, prepared, cfg.RandomSamples, cfg.ForceOpaqueShapes, sampler, 2.0, maxRad, progress, cfg)
 
 		fmt.Printf("[%d/%d] Evaluating random sample batch on OpenCL (%d)...\n", step, cfg.StopAt, len(randomCands))
-		best, bestScore, err := submitAndPickBest(evaluator, randomCands, acceptedShapes)
+		best, bestScore, err := submitAndPickBestTwoStage(evaluator, randomCands, acceptedShapes, progress, cfg)
 		if err != nil {
 			return err
 		}
@@ -408,6 +411,10 @@ func runSinglePass(opts Options, cfg model.Settings, prepared *imageutil.Prepare
 		pendingGrid = gpu.GridTicket{}
 	}
 
+	if cfg.EnablePruning {
+		shapes = PruneShapes(prepared.Target, prepared.OpaqueMask, prepared.Width, prepared.Height, shapes, cfg.PruneThreshold, prepared.BackgroundRGBA, prepared.HasTransparency)
+	}
+
 	if err := output.SaveGeometry(output.BuildFinalOutputPath(resolveOutputBase(opts)), shapes); err != nil {
 		return err
 	}
@@ -553,7 +560,7 @@ func (s *errorSampler) sample(rng *rand.Rand) (float32, float32) {
 // angle) is randomized; color is left zero because the GPU evaluator
 // computes the optimal color analytically and writes it back in the
 // EvalResult.
-func randomCandidates(rng *rand.Rand, prepared *imageutil.PreparedImage, count int, forceOpaque bool, sampler *errorSampler, minRadius, maxRadius float32) []model.Candidate {
+func randomCandidates(rng *rand.Rand, prepared *imageutil.PreparedImage, count int, forceOpaque bool, sampler *errorSampler, minRadius, maxRadius float32, progress float32, cfg model.Settings) []model.Candidate {
 	out := make([]model.Candidate, 0, count)
 	w := float32(prepared.Width)
 	h := float32(prepared.Height)
@@ -576,11 +583,24 @@ func randomCandidates(rng *rand.Rand, prepared *imageutil.PreparedImage, count i
 		if !forceOpaque {
 			alpha = randRange(rng, 0.3, 1.0)
 		}
+
+		curMinRad := minRadius
+		curMaxRad := maxRadius
+
+		if cfg.EnableLateSmallCandidates && progress >= cfg.LateSmallCandidateStart {
+			if rng.Float32() < cfg.LateSmallCandidateShare {
+				curMaxRad = maxRadius * cfg.LateSmallCandidateRadiusFrac
+				if curMaxRad < minRadius {
+					curMinRad = curMaxRad * 0.5
+				}
+			}
+		}
+
 		out = append(out, model.Candidate{
 			X:     x,
 			Y:     y,
-			RX:    snapToValidRX(randRange(rng, minRadius, maxRadius)),
-			RY:    snapToValidRX(randRange(rng, minRadius, maxRadius)),
+			RX:    snapToValidRX(randRange(rng, curMinRad, curMaxRad)),
+			RY:    snapToValidRX(randRange(rng, curMinRad, curMaxRad)),
 			Theta: rng.Float32() * 360,
 			A:     alpha,
 		})
@@ -596,6 +616,78 @@ func randomCandidates(rng *rand.Rand, prepared *imageutil.PreparedImage, count i
 		})
 	}
 	return out
+}
+
+func submitAndPickBestTwoStage(e *gpu.Evaluator, cands []model.Candidate, acceptedShapes int, progress float32, cfg model.Settings) (model.Candidate, float32, error) {
+	if !cfg.EnableTwoStageRandom || progress < cfg.TwoStageRandomStart || len(cands) <= cfg.RandomRefineTopK {
+		e.SampleStep = 1
+		return submitAndPickBest(e, cands, acceptedShapes)
+	}
+
+	// Stage 1: Coarse evaluation
+	e.SampleStep = cfg.RandomCoarseSampleStep
+	t, err := e.SubmitEval(cands)
+	if err != nil {
+		return model.Candidate{}, 0, err
+	}
+	results, err := e.WaitEval(t)
+	if err != nil {
+		return model.Candidate{}, 0, err
+	}
+
+	type candWithScore struct {
+		cand  model.Candidate
+		score float32
+	}
+	scored := make([]candWithScore, len(cands))
+	for i, res := range results {
+		scored[i] = candWithScore{
+			cand:  cands[i],
+			score: res.Score,
+		}
+	}
+
+	sort.Slice(scored, func(i, j int) bool {
+		return scored[i].score < scored[j].score
+	})
+
+	topKCount := cfg.RandomRefineTopK
+	if topKCount > len(scored) {
+		topKCount = len(scored)
+	}
+
+	topCands := make([]model.Candidate, topKCount)
+	for i := 0; i < topKCount; i++ {
+		topCands[i] = scored[i].cand
+	}
+
+	// Stage 2: Refined evaluation on top K candidates
+	e.SampleStep = 1
+	t2, err := e.SubmitEval(topCands)
+	if err != nil {
+		return model.Candidate{}, 0, err
+	}
+	results2, err := e.WaitEval(t2)
+	if err != nil {
+		return model.Candidate{}, 0, err
+	}
+
+	bestIdx := 0
+	bestScore := results2[0].Score
+	for i := 1; i < len(results2); i++ {
+		if results2[i].Score < bestScore {
+			bestScore = results2[i].Score
+			bestIdx = i
+		}
+	}
+
+	bestCand := topCands[bestIdx]
+	bestCand.R = results2[bestIdx].R
+	bestCand.G = results2[bestIdx].G
+	bestCand.B = results2[bestIdx].B
+	bestCand.A = topCands[bestIdx].A
+
+	return bestCand, bestScore, nil
 }
 
 
@@ -669,8 +761,8 @@ func toShape(c model.Candidate, score float64) model.Shape {
 		Data: []float64{
 			float64(c.X),
 			float64(c.Y),
-			float64(c.RX),
-			float64(c.RY),
+			float64(c.RX) * 1.0125,
+			float64(c.RY) * 1.0125,
 			float64(angle),
 		},
 		Color: []int{int(f32ToByte(c.R)), int(f32ToByte(c.G)), int(f32ToByte(c.B)), int(f32ToByte(c.A))},

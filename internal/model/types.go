@@ -23,6 +23,26 @@ type Settings struct {
 	MultiScale                    bool
 	SavePassPreviews              bool
 	LoadGeometry                  string
+
+	// Preprocessing
+	LogoHardEdges                 bool
+	PreprocessMode                string
+
+	// Advanced Sampling (Two-Stage Random)
+	EnableTwoStageRandom          bool
+	TwoStageRandomStart           float32
+	RandomCoarseSampleStep        int
+	RandomRefineTopK              int
+
+	// Advanced Sampling (Late Small Candidates)
+	EnableLateSmallCandidates     bool
+	LateSmallCandidateShare       float32
+	LateSmallCandidateStart       float32
+	LateSmallCandidateRadiusFrac  float32
+
+	// Post-processing Pruning
+	EnablePruning                 bool
+	PruneThreshold                float64
 }
 
 type PassConfig struct {

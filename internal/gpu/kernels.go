@@ -112,8 +112,7 @@ __kernel void evaluate_candidates_v3(
     float sCR = 0.0f, sCG = 0.0f, sCB = 0.0f, sCA = 0.0f;       // Σ current
     float sCR2 = 0.0f, sCG2 = 0.0f, sCB2 = 0.0f, sCA2 = 0.0f;   // Σ current²
     float sTCR = 0.0f, sTCG = 0.0f, sTCB = 0.0f, sTCA = 0.0f;   // Σ target·current
-    float sum_wr = 0.0f, sum_wg = 0.0f, sum_wb = 0.0f;          // Σ weight
-    float sumEdge = 0.0f;                                        // Σ edgeMap (for post-hoc scaling)
+    float sum_wr = 0.0f, sum_wg = 0.0f, sum_wb = 0.0f, sum_wa = 0.0f;          // Σ weight
 
     int sampleStride = max(sampleStep, 1);
 
@@ -135,27 +134,29 @@ __kernel void evaluate_candidates_v3(
 
             float4 t = target[p];
             float4 s = current[p];
+            float imp = (edgeWeight > 0.0f) ? edgeMap[p] : 1.0f;
 
             float r_avg = (t.x + s.x) * 0.5f;
-            float wr = 0.2f + 0.1f * r_avg;
-            float wg = 0.4f;
-            float wb = 0.3f + 0.1f * (1.0f - r_avg);
+            float wr = (0.2f + 0.1f * r_avg) * imp;
+            float wg = 0.4f * imp;
+            float wb = (0.3f + 0.1f * (1.0f - r_avg)) * imp;
+            float wa = imp;
 
-            sTR += wr * t.x; sTG += wg * t.y; sTB += wb * t.z; sTA += t.w;
-            sCR += wr * s.x; sCG += wg * s.y; sCB += wb * s.z; sCA += s.w;
+            sTR += wr * t.x; sTG += wg * t.y; sTB += wb * t.z; sTA += wa * t.w;
+            sCR += wr * s.x; sCG += wg * s.y; sCB += wb * s.z; sCA += wa * s.w;
             sCR2 += wr * s.x * s.x;
             sCG2 += wg * s.y * s.y;
             sCB2 += wb * s.z * s.z;
-            sCA2 += s.w * s.w;
+            sCA2 += wa * s.w * s.w;
             sTCR += wr * t.x * s.x;
             sTCG += wg * t.y * s.y;
             sTCB += wb * t.z * s.z;
-            sTCA += t.w * s.w;
+            sTCA += wa * t.w * s.w;
 
             sum_wr += wr;
             sum_wg += wg;
             sum_wb += wb;
-            sumEdge += edgeMap[p];
+            sum_wa += wa;
             N++;
         }
     }
@@ -173,7 +174,7 @@ __kernel void evaluate_candidates_v3(
         return;
     }
 
-    float Nf = (float)N;
+    float Nf = sum_wa;
     float invA = 1.0f - ca;
 
     // Optimal RGB color: c = (weighted_mean(t) − weighted_mean(s)·(1−α)) / α  (clamped).
@@ -212,17 +213,6 @@ __kernel void evaluate_candidates_v3(
     if (Nt > 0) {
         float penalty = a2 * ((float)Nt) * (oR*oR + oG*oG + oB*oB + 1.0f);
         totalDelta += penalty;
-    }
-
-    // Edge-aware post-hoc scaling: reward shapes whose footprint covers
-    // high-edge-density regions. The optimal color above was computed
-    // from UNBIASED channel weights, so it remains colour-accurate.
-    // The scaling only magnifies the (already negative) delta for shapes
-    // on edges, making the optimiser prefer them over equal-delta flat
-    // shapes. edgeWeight=0 → multiplier is 1.0, no effect.
-    if (edgeWeight > 0.0f && N > 0) {
-        float avgEdge = sumEdge / (float)N;
-        totalDelta *= (1.0f + edgeWeight * avgEdge);
     }
 
     results[gid * 4 + 0] = totalDelta;
@@ -299,8 +289,7 @@ __kernel void evaluate_candidates_v4(
     float sCR = 0.0f, sCG = 0.0f, sCB = 0.0f, sCA = 0.0f;
     float sCR2 = 0.0f, sCG2 = 0.0f, sCB2 = 0.0f, sCA2 = 0.0f;
     float sTCR = 0.0f, sTCG = 0.0f, sTCB = 0.0f, sTCA = 0.0f;
-    float sum_wr = 0.0f, sum_wg = 0.0f, sum_wb = 0.0f;
-    float sumEdge = 0.0f;
+    float sum_wr = 0.0f, sum_wg = 0.0f, sum_wb = 0.0f, sum_wa = 0.0f;
 
     int sampleStride = max(sampleStep, 1);
 
@@ -329,20 +318,22 @@ __kernel void evaluate_candidates_v4(
 
         float4 t = target[p];
         float4 s = current[p];
+        float imp = (edgeWeight > 0.0f) ? edgeMap[p] : 1.0f;
 
         float r_avg = (t.x + s.x) * 0.5f;
-        float wr = 0.2f + 0.1f * r_avg;
-        float wg = 0.4f;
-        float wb = 0.3f + 0.1f * (1.0f - r_avg);
+        float wr = (0.2f + 0.1f * r_avg) * imp;
+        float wg = 0.4f * imp;
+        float wb = (0.3f + 0.1f * (1.0f - r_avg)) * imp;
+        float wa = imp;
 
-        sTR += wr * t.x; sTG += wg * t.y; sTB += wb * t.z; sTA += t.w;
-        sCR += wr * s.x; sCG += wg * s.y; sCB += wb * s.z; sCA += s.w;
+        sTR += wr * t.x; sTG += wg * t.y; sTB += wb * t.z; sTA += wa * t.w;
+        sCR += wr * s.x; sCG += wg * s.y; sCB += wb * s.z; sCA += wa * s.w;
         sCR2 += wr * s.x * s.x; sCG2 += wg * s.y * s.y;
-        sCB2 += wb * s.z * s.z; sCA2 += s.w * s.w;
+        sCB2 += wb * s.z * s.z; sCA2 += wa * s.w * s.w;
         sTCR += wr * t.x * s.x; sTCG += wg * t.y * s.y;
-        sTCB += wb * t.z * s.z; sTCA += t.w * s.w;
+        sTCB += wb * t.z * s.z; sTCA += wa * t.w * s.w;
         sum_wr += wr; sum_wg += wg; sum_wb += wb;
-        sumEdge += edgeMap[p];
+        sum_wa += wa;
         N++;
     }
 
@@ -359,7 +350,7 @@ __kernel void evaluate_candidates_v4(
     l_data[off + 14] = sTCR;      l_data[off + 15] = sTCG;
     l_data[off + 16] = sTCB;      l_data[off + 17] = sTCA;
     l_data[off + 18] = sum_wr;    l_data[off + 19] = sum_wg;
-    l_data[off + 20] = sum_wb;    l_data[off + 21] = sumEdge;
+    l_data[off + 20] = sum_wb;    l_data[off + 21] = sum_wa;
 
     barrier(CLK_LOCAL_MEM_FENCE);
 
@@ -386,7 +377,7 @@ __kernel void evaluate_candidates_v4(
     sCR2= l_data[10]; sCG2= l_data[11]; sCB2= l_data[12]; sCA2= l_data[13];
     sTCR= l_data[14]; sTCG= l_data[15]; sTCB= l_data[16]; sTCA= l_data[17];
     sum_wr = l_data[18]; sum_wg = l_data[19]; sum_wb = l_data[20];
-    sumEdge = l_data[21];
+    sum_wa = l_data[21];
 
     // Hard reject (same thresholds as v3).
     if (N == 0 || Nt * 100 > N) {
@@ -397,7 +388,7 @@ __kernel void evaluate_candidates_v4(
         return;
     }
 
-    float Nf = (float)N;
+    float Nf = sum_wa;
     float invA = 1.0f - ca;
 
     float oR = clamp((sTR / sum_wr - (sCR / sum_wr) * invA) / ca, 0.0f, 1.0f);
@@ -423,12 +414,6 @@ __kernel void evaluate_candidates_v4(
 
     if (Nt > 0) {
         totalDelta += a2 * ((float)Nt) * (oR*oR + oG*oG + oB*oB + 1.0f);
-    }
-
-    // Edge-aware post-hoc scaling (same logic as v3).
-    if (edgeWeight > 0.0f && N > 0) {
-        float avgEdge = sumEdge / (float)N;
-        totalDelta *= (1.0f + edgeWeight * avgEdge);
     }
 
     results[gid * 4 + 0] = totalDelta;
@@ -534,12 +519,12 @@ __kernel void compute_error_grid(
             float db = t.z - s.z;
             float da = t.w - s.w;
             float pixelError = dr * dr + dg * dg + db * db + da * da;
-            
+
             if (edgeWeight > 0.0f) {
-                float edgeBoost = 1.0f + edgeWeight * edgeMap[p];
+                float edgeBoost = edgeMap[p];
                 pixelError *= edgeBoost;
             }
-            
+
             sum += pixelError;
         }
     }
