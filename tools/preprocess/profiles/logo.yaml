@@ -1,0 +1,30 @@
+name: logo
+description: "Logo / 文字 / 圖標，強調銳利輪廓與少色彩"
+
+stages:
+  - name: upscale
+    enabled: true
+    params:
+      method: lanczos
+      scale: 2
+
+  - name: style
+    enabled: true
+    params:
+      method: toon
+
+  - name: quantize
+    enabled: false
+    params:
+      method: kmeans
+      n_colors: 8
+      colorspace: lab
+      dither: false
+
+  - name: edge_enhance
+    enabled: true
+    params:
+      method: unsharp_mask
+      amount: 2.0
+      radius: 0.8
+      threshold: 3

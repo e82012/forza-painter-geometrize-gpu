@@ -1,0 +1,33 @@
+name: landscape
+description: "風景 / 複雜場景"
+
+stages:
+  - name: upscale
+    enabled: true
+    params:
+      method: lanczos
+      scale: 1
+
+  - name: style
+    enabled: true
+    params:
+      method: bilateral
+      bilateral_d: 5
+      bilateral_sigma_color: 50
+      bilateral_sigma_space: 50
+      iterations: 1
+
+  - name: quantize
+    enabled: false
+    params:
+      method: kmeans
+      n_colors: 32
+      colorspace: lab
+
+  - name: edge_enhance
+    enabled: true
+    params:
+      method: unsharp_mask
+      amount: 1.2
+      radius: 0.5
+      threshold: 5

@@ -1,0 +1,3 @@
+name: auto
+description: "自動選擇"
+# 這裡不會直接被讀取成 stage 設定，而是透過 classifier 決定轉向哪個 profile

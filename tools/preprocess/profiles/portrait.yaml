@@ -1,0 +1,34 @@
+name: portrait
+description: "人像/面孔，強調膚色漸層保留與輪廓強化"
+
+stages:
+  - name: upscale
+    enabled: true
+    params:
+      method: lanczos
+      scale: 2
+
+  - name: style
+    enabled: true
+    params:
+      method: bilateral
+      bilateral_d: 7
+      bilateral_sigma_color: 50
+      bilateral_sigma_space: 50
+      iterations: 1
+
+  - name: quantize
+    enabled: true
+    params:
+      method: kmeans
+      n_colors: 24
+      colorspace: lab
+      dither: false
+
+  - name: edge_enhance
+    enabled: true
+    params:
+      method: unsharp_mask
+      amount: 1.5
+      radius: 1.0
+      threshold: 5
