@@ -38,7 +38,7 @@ func DefaultSettings() model.Settings {
 		PreprocessMode:                "none",
 		EnableTwoStageRandom:          true,
 		TwoStageRandomStart:           0.0,
-		RandomCoarseSampleStep:        2,
+		RandomCoarseSampleStep:        1,
 		RandomRefineTopK:              2048,
 		EnableLateSmallCandidates:     true,
 		LateSmallCandidateShare:       0.66,

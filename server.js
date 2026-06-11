@@ -75,7 +75,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && (pathname === '/' || pathname === '/index.html' || pathname === '/app.css' || pathname === '/app.js')) {
     const filename = pathname === '/' ? 'index.html' : pathname.slice(1);
     const filePath = path.join(STATIC_DIR, filename);
-    
+
     let contentType = 'text/html';
     if (filename.endsWith('.css')) contentType = 'text/css';
     if (filename.endsWith('.js')) contentType = 'application/javascript';
@@ -98,7 +98,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && pathname === '/api/preview-image') {
     // 優先回傳記憶體中的緩存圖片，以防止實體檔案已遭清理
     if (lastPreviewBuffer) {
-      res.writeHead(200, { 
+      res.writeHead(200, {
         'Content-Type': 'image/png',
         'Cache-Control': 'no-cache, no-store, must-revalidate'
       });
@@ -107,7 +107,7 @@ const server = http.createServer((req, res) => {
     }
 
     const previewPath = path.join(__dirname, 'img_preview', 'web_preview.png');
-    
+
     // 防禦性讀取：進行最多 3 次 retry，每次間隔 50ms
     let attempts = 0;
     const readPreview = () => {
@@ -123,12 +123,12 @@ const server = http.createServer((req, res) => {
             }
 
             const previewFiles = files.filter(f => f.startsWith('web_preview.') && f.endsWith('.png') && f !== 'web_preview.png');
-            
+
             if (previewFiles.length > 0) {
               // 排序並尋找最高步數的歷史檔案
               let maxStep = -1;
               let targetFile = '';
-              
+
               for (const file of previewFiles) {
                 const parts = file.split('.');
                 if (parts.length >= 3) {
@@ -146,7 +146,7 @@ const server = http.createServer((req, res) => {
                   if (readErr) {
                     fallbackToOriginal();
                   } else {
-                    res.writeHead(200, { 
+                    res.writeHead(200, {
                       'Content-Type': 'image/png',
                       'Cache-Control': 'no-cache, no-store, must-revalidate'
                     });
@@ -169,7 +169,7 @@ const server = http.createServer((req, res) => {
                 if (oriErr) {
                   retryOr404();
                 } else {
-                  res.writeHead(200, { 
+                  res.writeHead(200, {
                     'Content-Type': 'image/png',
                     'Cache-Control': 'no-cache, no-store, must-revalidate'
                   });
@@ -191,7 +191,7 @@ const server = http.createServer((req, res) => {
             }
           }
         } else {
-          res.writeHead(200, { 
+          res.writeHead(200, {
             'Content-Type': 'image/png',
             'Cache-Control': 'no-cache, no-store, must-revalidate'
           });
@@ -211,7 +211,7 @@ const server = http.createServer((req, res) => {
     const filename = decodeURIComponent(rawFilename);
     const ext = path.extname(filename);
     const base = path.basename(filename, ext);
-    
+
     // 生成安全名稱
     const safeName = `${base}_${Date.now()}${ext}`;
     const targetPath = path.join(__dirname, 'img_pre', safeName);
@@ -240,7 +240,7 @@ const server = http.createServer((req, res) => {
     req.on('end', () => {
       try {
         const reqData = JSON.parse(body);
-        
+
         if (jobStatus.status === 'running') {
           res.writeHead(409, { 'Content-Type': 'text/plain; charset=utf-8' });
           res.end('已有任務正在運行中');
@@ -264,13 +264,13 @@ const server = http.createServer((req, res) => {
           logs: []
         };
 
-        // 決定品質參數：統一預設最大圖層為 1200 層
+        // 決定品質參數：stopAt 固定 1200 層（適合多圖層車貼設計），提升採樣密度改善精緻度
         // 預設 (中等品質)
         let config = {
           maxPreviewSize: 500,
           maxResolution: 1200,
-          mutatedSamples: 1500,
-          randomSamples: 25000,
+          mutatedSamples: 6400,   // CMA-ES 200 代 (lambda=32)
+          randomSamples: 80000,
           stopAt: 1200,
           saveAt: '600,1200'
         };
@@ -278,35 +278,35 @@ const server = http.createServer((req, res) => {
         if (reqData.quality === 'low') {
           config = {
             maxPreviewSize: 500,
-            maxResolution: 1200,
-            mutatedSamples: 800,
-            randomSamples: 8000,
+            maxResolution: 1000,
+            mutatedSamples: 1600,  // CMA-ES 50 代
+            randomSamples: 15000,
             stopAt: 1200,
             saveAt: '1200'
           };
         } else if (reqData.quality === 'high') {
           config = {
             maxPreviewSize: 500,
-            maxResolution: 1200,
-            mutatedSamples: 3000,
-            randomSamples: 60000,
+            maxResolution: 1600,   // 高解析度以保留細節
+            mutatedSamples: 15000, // CMA-ES 468 代 (與 CLI 高品質對齊)
+            randomSamples: 200000, // 與 CLI 預設對齊，大幅提升隨機覆蓋密度
             stopAt: 1200,
             saveAt: '300,600,900,1200'
           };
         } else if (reqData.quality === 'custom') {
           const custom = reqData.customSettings || {};
           config.maxResolution = custom.maxResolution || 1200;
-          config.stopAt = custom.stopAt || 1000;
-          config.mutatedSamples = custom.mutatedSamples || 2000;
-          config.randomSamples = custom.randomSamples || 30000;
+          config.stopAt = custom.stopAt || 1200; // 解除鎖定，允許自訂
+          config.mutatedSamples = custom.mutatedSamples || 6400;
+          config.randomSamples = custom.randomSamples || 80000;
           config.maxPreviewSize = 500;
 
           // 生成 saveAt 序列
           const saveAtSlice = [];
-          for (let i = 500; i <= config.stopAt; i += 500) {
+          for (let i = 300; i <= config.stopAt; i += 300) {
             saveAtSlice.push(i);
           }
-          if (saveAtSlice.length === 0 || config.stopAt % 500 !== 0) {
+          if (saveAtSlice.length === 0 || config.stopAt % 300 !== 0) {
             saveAtSlice.push(config.stopAt);
           }
           config.saveAt = saveAtSlice.join(',');
@@ -317,17 +317,19 @@ const server = http.createServer((req, res) => {
         // 寫入臨時設定檔
         const tempIniPath = path.join(__dirname, 'settings', 'temp_web.ini');
         const iniContent = `description = Web Temp Configuration
-maxPreviewSize = ${config.maxPreviewSize}
-maxResolution = ${config.maxResolution}
-maxThreads = 0
-mutatedSamples = ${config.mutatedSamples}
-posterizeLevels = 20
-previewEvery = 20
-randomSamples = ${config.randomSamples}
-saveAt = ${config.saveAt}
-saveEvery = 50
-stopAt = ${config.stopAt}
-`;
+        maxPreviewSize = ${config.maxPreviewSize}
+        maxResolution = ${config.maxResolution}
+        maxThreads = 0
+        mutatedSamples = ${config.mutatedSamples}
+        posterizeLevels = 20
+        previewEvery = 20
+        randomSamples = ${config.randomSamples}
+        saveAt = ${config.saveAt}
+        saveEvery = 50
+        stopAt = ${config.stopAt}
+        randomCoarseSampleStep = 1
+        enableLateSmallCandidates = true
+        `;
         fs.writeFileSync(tempIniPath, iniContent);
 
         // 刪除舊的預覽圖片
@@ -536,7 +538,7 @@ stopAt = ${config.stopAt}
     const filename = decodeURIComponent(rawFilename);
     const ext = path.extname(filename);
     const base = path.basename(filename, ext);
-    
+
     const safeName = `${base}_${Date.now()}.json`;
     const targetPath = path.join(__dirname, 'img_json', safeName);
 
